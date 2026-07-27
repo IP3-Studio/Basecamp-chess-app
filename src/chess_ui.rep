@@ -1,0 +1,22 @@
+class ChessUi
+{
+    SLOT(void newGame(bool asWhite, int skillLevel, int moveTimeMs))
+    SLOT(void playerMove(QString uciMove))
+    SLOT(void undoMove())
+    SLOT(void requestHint())
+    SLOT(void setEnginePath(QString path))
+
+    PROP(QString fen="" READONLY)
+    PROP(QString legalMoves="" READONLY)
+    PROP(QString gameState="starting" READONLY)
+    PROP(QString status="" READONLY)
+    PROP(QString lastMove="" READONLY)
+    PROP(QString moveHistory="" READONLY)
+    PROP(QString evalText="" READONLY)
+    PROP(QString engineName="" READONLY)
+    PROP(bool engineReady=false READONLY)
+    PROP(bool playerIsWhite=true READONLY)
+    PROP(bool inCheck=false READONLY)
+
+    SIGNAL(hintReady(QString uciMove))
+}

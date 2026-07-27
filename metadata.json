@@ -1,0 +1,28 @@
+{
+  "name": "chess_ui",
+  "display_name": "Chess",
+  "version": "0.1.0",
+  "type": "ui_qml",
+  "interface": "universal",
+  "category": "games",
+  "description": "Play chess against the Stockfish engine — click-to-move board, difficulty levels, hints, and undo",
+  "main": "chess_ui_plugin",
+  "icon": "icons/chess.png",
+  "view": "qml/Main.qml",
+  "dependencies": [],
+  "codegen": { "rep": "src/chess_ui.rep" },
+
+  "nix": {
+    "packages": {
+      "build": ["stockfish"],
+      "runtime": []
+    },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}
