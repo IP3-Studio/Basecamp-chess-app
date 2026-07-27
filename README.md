@@ -39,9 +39,10 @@ Or download from the
 ### 2. Install the module
 
 Download the `.lgx` for your platform from the
-[latest release](../../releases/latest), then in Basecamp open **Modules**,
-click **Install LGX Package**, and select the file. Load it from the Modules
-view and Chess appears with the pawn icon.
+[latest release](../../releases/latest) (macOS Apple Silicon, Linux x86_64,
+Linux ARM64), then in Basecamp open **Modules**, click **Install LGX Package**,
+and select the file. Load it from the Modules view and Chess appears with the
+pawn icon.
 
 CLI alternative:
 
@@ -122,8 +123,6 @@ in-flight replies. A backend crash cannot take Basecamp down.
 - Threefold repetition is declared automatically at the third occurrence
   (no claim step), and only the simple insufficient-material cases
   (K vs K, K+B vs K, K+N vs K) are recognised
-- Prebuilt release assets cover macOS Apple Silicon; other platforms build
-  from source
 
 ## License
 
