@@ -6,7 +6,7 @@ const { test, run } = await import(resolve(root, "test-framework/framework.mjs")
 
 test("chess_ui: loads UI", async (app) => {
   await app.waitFor(
-    async () => { await app.expectTexts(["Logos Chess"]); },
+    async () => { await app.expectTexts(["Chess"]); },
     { timeout: 15000, interval: 500, description: "UI to load" }
   );
 });

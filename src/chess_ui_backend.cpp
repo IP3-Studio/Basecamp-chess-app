@@ -5,12 +5,14 @@
 #include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
-#include <QTimer>
+
+#include <cctype>
 
 namespace {
 const QString kSettingsOrg = QStringLiteral("Logos");
 const QString kSettingsApp = QStringLiteral("chess_ui");
 const QString kEnginePathKey = QStringLiteral("enginePath");
+const int kLogCap = 80;
 
 // Position identity for repetition counting: piece placement, side to move,
 // castling rights, en-passant square — the first four FEN fields.
@@ -32,6 +34,127 @@ bool insufficientMaterial(const QString& placement)
             ++minors;
     }
     return minors <= 1;
+}
+
+// Board indexed a1=0 .. h8=63 (rank * 8 + file).
+struct Board {
+    char sq[64] = {};
+};
+
+Board parseBoard(const QString& fen)
+{
+    Board b;
+    int rank = 7;
+    int file = 0;
+    const QString placement = fen.section(QLatin1Char(' '), 0, 0);
+    for (const QChar& c : placement) {
+        if (c == QLatin1Char('/')) {
+            --rank;
+            file = 0;
+        } else if (c.isDigit()) {
+            file += c.digitValue();
+        } else {
+            if (rank >= 0 && rank < 8 && file >= 0 && file < 8)
+                b.sq[rank * 8 + file] = c.toLatin1();
+            ++file;
+        }
+    }
+    return b;
+}
+
+int fileOf(const QString& sq) { return sq.at(0).toLatin1() - 'a'; }
+int rankOf(const QString& sq) { return sq.at(1).toLatin1() - '1'; }
+
+// Standard algebraic notation for a UCI move in the given position. Check and
+// mate suffixes are patched later, once the resulting position is known.
+QString sanForMove(const Board& b, const QString& uci, const QStringList& allLegal)
+{
+    const QString from = uci.mid(0, 2);
+    const QString to = uci.mid(2, 2);
+    const int ff = fileOf(from);
+    const int fr = rankOf(from);
+    const int tf = fileOf(to);
+    const int tr = rankOf(to);
+    const char piece = b.sq[fr * 8 + ff];
+    const char upper = static_cast<char>(std::toupper(static_cast<unsigned char>(piece)));
+
+    if (upper == 'K' && qAbs(tf - ff) == 2)
+        return tf > ff ? QStringLiteral("O-O") : QStringLiteral("O-O-O");
+
+    const bool isPawn = upper == 'P';
+    const bool capture = b.sq[tr * 8 + tf] != 0 || (isPawn && tf != ff);
+
+    QString san;
+    if (isPawn) {
+        if (capture) {
+            san += QLatin1Char(static_cast<char>('a' + ff));
+            san += QLatin1Char('x');
+        }
+        san += to;
+        if (uci.size() == 5) {
+            san += QLatin1Char('=');
+            san += uci.at(4).toUpper();
+        }
+        return san;
+    }
+
+    san += QLatin1Char(upper);
+
+    // Disambiguation: file if unique, else rank, else both.
+    bool any = false, fileClash = false, rankClash = false;
+    for (const QString& other : allLegal) {
+        if (other == uci || other.mid(2, 2) != to)
+            continue;
+        const int of = fileOf(other);
+        const int orr = rankOf(other);
+        const char op = b.sq[orr * 8 + of];
+        if (std::toupper(static_cast<unsigned char>(op)) != upper)
+            continue;
+        any = true;
+        if (of == ff) fileClash = true;
+        if (orr == fr) rankClash = true;
+    }
+    if (any) {
+        if (!fileClash)
+            san += QLatin1Char(static_cast<char>('a' + ff));
+        else if (!rankClash)
+            san += QLatin1Char(static_cast<char>('1' + fr));
+        else
+            san += from;
+    }
+    if (capture)
+        san += QLatin1Char('x');
+    san += to;
+    return san;
+}
+
+// Loose normalisation for typed-move matching.
+QString normalizedSan(QString s)
+{
+    s = s.trimmed();
+    s.remove(QLatin1Char('+'));
+    s.remove(QLatin1Char('#'));
+    s.remove(QLatin1Char('x'));
+    s.remove(QLatin1Char('='));
+    s.replace(QLatin1Char('0'), QLatin1Char('O'));
+    return s;
+}
+
+int materialDiff(const QString& placement)
+{
+    int diff = 0;
+    for (const QChar& c : placement) {
+        int v = 0;
+        switch (c.toLower().toLatin1()) {
+        case 'p': v = 1; break;
+        case 'n': case 'b': v = 3; break;
+        case 'r': v = 5; break;
+        case 'q': v = 9; break;
+        default: continue;
+        }
+        diff += c.isUpper() ? v : -v;
+    }
+    return diff;
 }
 }
 
@@ -58,6 +181,11 @@ ChessUiBackend::ChessUiBackend()
         if (!m_quitting)
             engineFailed(QStringLiteral("Stockfish stopped unexpectedly."));
     });
+
+    m_clockTimer.setInterval(200);
+    QObject::connect(&m_clockTimer, &QTimer::timeout, &m_clockTimer,
+                     [this]() { tickClock(); });
+    m_clockTimer.start();
 }
 
 ChessUiBackend::~ChessUiBackend()
@@ -187,7 +315,7 @@ void ChessUiBackend::engineFailed(const QString& reason)
     setStatus(reason + QStringLiteral(
         " Install Stockfish (macOS: \"brew install stockfish\", Debian/Ubuntu: "
         "\"apt install stockfish\") or enter the full path to a Stockfish "
-        "binary below, then press \"Use engine path\"."));
+        "binary in Settings."));
 }
 
 void ChessUiBackend::send(const QString& line)
@@ -200,22 +328,45 @@ void ChessUiBackend::send(const QString& line)
 // ---------------------------------------------------------------------------
 // .rep SLOTs
 
-void ChessUiBackend::newGame(bool asWhite, int skillLevel, int moveTimeMs)
+void ChessUiBackend::newGame(QString gameMode, bool asWhite, int skillLevel, int timeControlMin)
 {
+    m_mode = gameMode == QLatin1String("table") ? QStringLiteral("table")
+                                                : QStringLiteral("engine");
+    setMode(m_mode);
     m_playerWhite = asWhite;
     m_skill = qBound(0, skillLevel, 20);
-    m_moveTimeMs = qBound(100, moveTimeMs, 10000);
+    setSkill(m_skill);
+    m_moveTimeMs = 300 + m_skill * 60;
+    m_untimed = timeControlMin <= 0;
+    m_whiteMs = m_blackMs = m_untimed ? 0 : qint64(timeControlMin) * 60000;
+    setClockWhiteMs(int(m_whiteMs));
+    setClockBlackMs(int(m_blackMs));
+
     ++m_gen;
     m_moves.clear();
+    m_sans.clear();
     m_collectedMoves.clear();
+    m_legalSanList.clear();
     m_fenKeys.clear();
+    m_logLines.clear();
+    setEngineLog(QString());
     setPlayerIsWhite(m_playerWhite);
     setFen(QString());
     setLastMove(QString());
     setEvalText(QString());
+    setEvalCp(0);
     setLegalMoves(QString());
+    setLegalSans(QString());
     setInCheck(false);
-    rebuildHistory();
+    rebuildSanRows();
+    updateMaterial();
+
+    if (tableMode())
+        appendLog(QStringLiteral("The table is set. White to play."));
+    else
+        appendLog(QStringLiteral("Loaded. Skill %1. %2 to move.")
+                      .arg(m_skill)
+                      .arg(QStringLiteral("White")));
 
     if (!m_engineRunning || m_proc.state() == QProcess::NotRunning) {
         startEngine();
@@ -246,13 +397,46 @@ void ChessUiBackend::playerMove(QString uciMove)
         return;
     if (!m_collectedMoves.contains(uciMove))
         return;
-    m_moves << uciMove;
-    // Transient state: blocks further input until finishPerft() has validated
-    // the new position and published a fresh legal-move list.
-    setGameState(QStringLiteral("working"));
-    setLastMove(uciMove);
-    rebuildHistory();
-    refreshPosition();
+    applyMove(uciMove);
+}
+
+void ChessUiBackend::typedMove(QString text)
+{
+    if (gameState() != QLatin1String("playerTurn") || searchPending())
+        return;
+    const QString raw = text.trimmed();
+    if (raw.isEmpty())
+        return;
+
+    // UCI form first (e2e4, e7e8q).
+    const QString lowered = raw.toLower();
+    if (m_collectedMoves.contains(lowered)) {
+        applyMove(lowered);
+        return;
+    }
+
+    // SAN, exact case; fall back to case-insensitive only when unambiguous
+    // (case matters: bxc3 is a pawn capture, Bxc3 a bishop move).
+    const QString wanted = normalizedSan(raw);
+    QStringList caseHits, looseHits;
+    for (int i = 0; i < m_legalSanList.size(); ++i) {
+        const QString cand = normalizedSan(m_legalSanList.at(i));
+        if (cand == wanted)
+            caseHits << m_collectedMoves.at(i);
+        if (cand.compare(wanted, Qt::CaseInsensitive) == 0)
+            looseHits << m_collectedMoves.at(i);
+    }
+    if (caseHits.size() == 1) {
+        applyMove(caseHits.first());
+        return;
+    }
+    if (caseHits.isEmpty() && looseHits.size() == 1) {
+        applyMove(looseHits.first());
+        return;
+    }
+    setStatus(caseHits.size() > 1 || looseHits.size() > 1
+                  ? QStringLiteral("\"%1\" is ambiguous — add the file or rank (e.g. Nbd2).").arg(raw)
+                  : QStringLiteral("\"%1\" is not a legal move here.").arg(raw));
 }
 
 void ChessUiBackend::undoMove()
@@ -262,17 +446,25 @@ void ChessUiBackend::undoMove()
         return;
     if (searchPending() || m_moves.isEmpty())
         return;
-    // As Black the first list entry is the engine's move — with fewer than
-    // two moves there is nothing of the player's to take back, and popping
-    // would merely re-roll the engine's opening.
-    if (m_moves.size() < (m_playerWhite ? 1 : 2))
-        return;
-    m_moves.removeLast();
-    if (!m_moves.isEmpty() && !isPlayersTurn())
+    if (tableMode()) {
         m_moves.removeLast();
+        m_sans.removeLast();
+    } else {
+        // As Black the first list entry is the engine's move — with fewer than
+        // two moves there is nothing of the player's to take back, and popping
+        // would merely re-roll the engine's opening.
+        if (m_moves.size() < (m_playerWhite ? 1 : 2))
+            return;
+        m_moves.removeLast();
+        m_sans.removeLast();
+        if (!m_moves.isEmpty() && !isPlayersTurn()) {
+            m_moves.removeLast();
+            m_sans.removeLast();
+        }
+    }
     setGameState(QStringLiteral("working"));
     setLastMove(m_moves.isEmpty() ? QString() : m_moves.last());
-    rebuildHistory();
+    rebuildSanRows();
     refreshPosition();
 }
 
@@ -286,6 +478,48 @@ void ChessUiBackend::requestHint()
     send(QStringLiteral("setoption name Skill Level value 20"));
     send(QStringLiteral("go movetime 600"));
     m_queue.enqueue({Req::Hint, m_gen, static_cast<int>(m_moves.size())});
+}
+
+void ChessUiBackend::resign()
+{
+    const QString st = gameState();
+    if (st != QLatin1String("playerTurn") && st != QLatin1String("engineThinking")
+        && st != QLatin1String("working"))
+        return;
+    if (searchPending())
+        send(QStringLiteral("stop"));
+    ++m_gen;
+    if (tableMode())
+        endGame(QStringLiteral("%1 resigns — %2 wins.")
+                    .arg(colorName(sideToMove() == QLatin1String("w")))
+                    .arg(colorName(sideToMove() != QLatin1String("w"))));
+    else
+        endGame(QStringLiteral("You resigned — Stockfish wins."));
+}
+
+void ChessUiBackend::agreeDraw()
+{
+    const QString st = gameState();
+    if (st != QLatin1String("playerTurn") && st != QLatin1String("working"))
+        return;
+    if (!tableMode())
+        return;
+    ++m_gen;
+    endGame(QStringLiteral("Draw agreed."));
+}
+
+void ChessUiBackend::changeSkill(int level)
+{
+    m_skill = qBound(0, level, 20);
+    m_moveTimeMs = 300 + m_skill * 60;
+    setSkill(m_skill);
+    appendLog(QStringLiteral("Skill set to %1.").arg(m_skill));
+    if (!m_engineRunning)
+        return;
+    if (searchPending() || handshakePending())
+        m_skillDirty = true;  // applied once the current search drains
+    else
+        send(QStringLiteral("setoption name Skill Level value %1").arg(m_skill));
 }
 
 void ChessUiBackend::setEnginePath(QString path)
@@ -303,6 +537,7 @@ void ChessUiBackend::setEnginePath(QString path)
 
 void ChessUiBackend::beginSetup()
 {
+    m_skillDirty = false;
     send(QStringLiteral("setoption name Skill Level value %1").arg(m_skill));
     send(QStringLiteral("ucinewgame"));
     send(QStringLiteral("isready"));
@@ -397,6 +632,10 @@ void ChessUiBackend::handleLine(const QString& line)
             m_queue.dequeue();
             if (p.type == Req::Hint)
                 send(QStringLiteral("setoption name Skill Level value %1").arg(m_skill));
+            else if (m_skillDirty && !searchPending()) {
+                m_skillDirty = false;
+                send(QStringLiteral("setoption name Skill Level value %1").arg(m_skill));
+            }
             if (m_deferredSetup && !searchPending()) {
                 m_deferredSetup = false;
                 beginSetup();
@@ -409,8 +648,10 @@ void ChessUiBackend::handleLine(const QString& line)
                 if (best != QLatin1String("(none)"))
                     applyEngineMove(best);
             } else {
+                const QString san = sanForMove(parseBoard(fen()), best, m_collectedMoves);
                 emit hintReady(best);
-                setStatus(QStringLiteral("Hint: %1 — your move.").arg(best));
+                appendLog(QStringLiteral("Hint: %1.").arg(san));
+                setStatus(QStringLiteral("Hint: %1 — your move.").arg(san));
             }
         }
         break;
@@ -421,40 +662,65 @@ void ChessUiBackend::finishPerft()
 {
     setLegalMoves(m_collectedMoves.join(QLatin1Char(' ')));
 
+    const Board board = parseBoard(fen());
+    m_legalSanList.clear();
+    for (const QString& mv : m_collectedMoves)
+        m_legalSanList << sanForMove(board, mv, m_collectedMoves);
+    setLegalSans(m_legalSanList.join(QLatin1Char(' ')));
+
+    // Patch the previous move's SAN with + / # now the reply is known.
+    if (!m_sans.isEmpty() && m_sans.size() == m_moves.size()) {
+        QString& last = m_sans.last();
+        if (!last.endsWith(QLatin1Char('+')) && !last.endsWith(QLatin1Char('#'))
+            && inCheck()) {
+            last += m_collectedMoves.isEmpty() ? QLatin1Char('#') : QLatin1Char('+');
+            rebuildSanRows();
+        }
+    }
+
+    updateMaterial();
+
     if (m_collectedMoves.isEmpty()) {
-        setGameState(QStringLiteral("gameOver"));
-        if (!m_pendingCheckers.isEmpty())
-            setStatus(isPlayersTurn()
-                          ? QStringLiteral("Checkmate — Stockfish wins.")
-                          : QStringLiteral("Checkmate — you win!"));
-        else
-            setStatus(QStringLiteral("Stalemate — it's a draw."));
+        if (!m_pendingCheckers.isEmpty()) {
+            const bool whiteMated = sideToMove() == QLatin1String("w");
+            if (tableMode())
+                endGame(QStringLiteral("Checkmate — %1 wins.").arg(colorName(!whiteMated)));
+            else
+                endGame(isPlayersTurn() ? QStringLiteral("Checkmate — Stockfish wins.")
+                                        : QStringLiteral("Checkmate — you win!"));
+        } else {
+            endGame(QStringLiteral("Stalemate — it's a draw."));
+        }
         return;
     }
 
     const QStringList fenFields = fen().split(QLatin1Char(' '));
     if (fenFields.size() >= 5 && fenFields.at(4).toInt() >= 100) {
-        setGameState(QStringLiteral("gameOver"));
-        setStatus(QStringLiteral("Draw by the fifty-move rule."));
+        endGame(QStringLiteral("Draw by the fifty-move rule."));
         return;
     }
 
     if (!fenFields.isEmpty() && insufficientMaterial(fenFields.first())) {
-        setGameState(QStringLiteral("gameOver"));
-        setStatus(QStringLiteral("Draw — insufficient material."));
+        endGame(QStringLiteral("Draw — insufficient material."));
         return;
     }
 
     if (m_fenKeys.count(repetitionKey(fen())) >= 3) {
-        setGameState(QStringLiteral("gameOver"));
-        setStatus(QStringLiteral("Draw by threefold repetition."));
+        endGame(QStringLiteral("Draw by threefold repetition."));
         return;
     }
 
-    if (isPlayersTurn()) {
+    if (tableMode() || isPlayersTurn()) {
         setGameState(QStringLiteral("playerTurn"));
-        setStatus(inCheck() ? QStringLiteral("Your move — check!")
-                            : QStringLiteral("Your move."));
+        const QString mover = tableMode()
+            ? colorName(sideToMove() == QLatin1String("w"))
+            : QStringLiteral("Your");
+        if (tableMode())
+            setStatus(inCheck() ? QStringLiteral("%1 to play — check!").arg(mover)
+                                : QStringLiteral("%1 to play.").arg(mover));
+        else
+            setStatus(inCheck() ? QStringLiteral("Your move — check!")
+                                : QStringLiteral("Your move."));
     } else {
         startThinking();
     }
@@ -481,10 +747,12 @@ void ChessUiBackend::parseEval(const QString& line)
 
     const auto cm = reCp.match(line);
     if (cm.hasMatch()) {
-        double v = cm.captured(1).toInt() / 100.0;
+        int cp = cm.captured(1).toInt();
         if (!whiteToMove)
-            v = -v;
-        QString text = QStringLiteral("Eval %1%2").arg(v >= 0 ? "+" : "").arg(v, 0, 'f', 2);
+            cp = -cp;
+        setEvalCp(qBound(-1500, cp, 1500));
+        const double v = cp / 100.0;
+        QString text = QStringLiteral("%1%2").arg(v >= 0 ? "+" : "").arg(v, 0, 'f', 2);
         if (!depth.isEmpty())
             text += QStringLiteral("  ·  depth %1").arg(depth);
         setEvalText(text);
@@ -495,6 +763,7 @@ void ChessUiBackend::parseEval(const QString& line)
     if (mm.hasMatch()) {
         const int n = mm.captured(1).toInt();
         const bool whiteMates = (n > 0) == whiteToMove;
+        setEvalCp(whiteMates ? 1500 : -1500);
         setEvalText(QStringLiteral("Mate in %1 for %2")
                         .arg(qAbs(n))
                         .arg(whiteMates ? QStringLiteral("White")
@@ -504,24 +773,70 @@ void ChessUiBackend::parseEval(const QString& line)
 
 void ChessUiBackend::applyEngineMove(const QString& mv)
 {
-    m_moves << mv;
-    setLastMove(mv);
-    rebuildHistory();
-    refreshPosition();
+    const QString san = sanForMove(parseBoard(fen()), mv, m_collectedMoves);
+    appendLog(QStringLiteral("Stockfish plays %1.").arg(san));
+    applyMove(mv);
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Game state
 
-void ChessUiBackend::rebuildHistory()
+void ChessUiBackend::applyMove(const QString& uciMove)
 {
-    QString h;
-    for (int i = 0; i < m_moves.size(); ++i) {
+    const QString san = sanForMove(parseBoard(fen()), uciMove, m_collectedMoves);
+    m_moves << uciMove;
+    m_sans << san;
+    // Transient state: blocks further input until finishPerft() has validated
+    // the new position and published a fresh legal-move list.
+    setGameState(QStringLiteral("working"));
+    setLastMove(uciMove);
+    rebuildSanRows();
+    refreshPosition();
+}
+
+void ChessUiBackend::endGame(const QString& text)
+{
+    setGameState(QStringLiteral("gameOver"));
+    setStatus(text);
+    appendLog(text);
+}
+
+void ChessUiBackend::rebuildSanRows()
+{
+    QString rows;
+    for (int i = 0; i < m_sans.size(); ++i) {
         if (i % 2 == 0)
-            h += QString::number(i / 2 + 1) + QStringLiteral(". ");
-        h += m_moves.at(i) + (i % 2 == 0 ? QStringLiteral("  ") : QStringLiteral("\n"));
+            rows += QString::number(i / 2 + 1) + QStringLiteral(". ") + m_sans.at(i);
+        else
+            rows += QLatin1Char(' ') + m_sans.at(i) + QLatin1Char('\n');
     }
-    setMoveHistory(h);
+    if (m_sans.size() % 2 == 1)
+        rows += QLatin1Char('\n');
+    setSanRows(rows);
+}
+
+void ChessUiBackend::updateMaterial()
+{
+    const QString placement = fen().section(QLatin1Char(' '), 0, 0);
+    if (placement.isEmpty()) {
+        setMaterial(QStringLiteral("Level"));
+        return;
+    }
+    const int diff = materialDiff(placement);
+    if (diff == 0)
+        setMaterial(QStringLiteral("Level"));
+    else if (diff > 0)
+        setMaterial(QStringLiteral("White +%1").arg(diff));
+    else
+        setMaterial(QStringLiteral("Black +%1").arg(-diff));
+}
+
+void ChessUiBackend::appendLog(const QString& line)
+{
+    m_logLines << line;
+    while (m_logLines.size() > kLogCap)
+        m_logLines.removeFirst();
+    setEngineLog(m_logLines.join(QLatin1Char('\n')));
 }
 
 bool ChessUiBackend::searchPending() const
@@ -547,5 +862,50 @@ QString ChessUiBackend::sideToMove() const
 
 bool ChessUiBackend::isPlayersTurn() const
 {
+    if (tableMode())
+        return true;
     return (sideToMove() == QLatin1String("w")) == m_playerWhite;
+}
+
+QString ChessUiBackend::colorName(bool white) const
+{
+    return white ? QStringLiteral("White") : QStringLiteral("Black");
+}
+
+// ---------------------------------------------------------------------------
+// Clock
+
+bool ChessUiBackend::clockActive() const
+{
+    if (m_untimed)
+        return false;
+    const QString st = gameState();
+    return st == QLatin1String("playerTurn") || st == QLatin1String("engineThinking")
+        || st == QLatin1String("working");
+}
+
+void ChessUiBackend::tickClock()
+{
+    if (!clockActive())
+        return;
+    const bool whiteToMove = sideToMove() == QLatin1String("w");
+    qint64& c = whiteToMove ? m_whiteMs : m_blackMs;
+    c = qMax<qint64>(0, c - m_clockTimer.interval());
+    if (whiteToMove)
+        setClockWhiteMs(int(c));
+    else
+        setClockBlackMs(int(c));
+    if (c == 0) {
+        ++m_gen;
+        if (searchPending())
+            send(QStringLiteral("stop"));
+        if (tableMode())
+            endGame(QStringLiteral("%1 ran out of time — %2 wins.")
+                        .arg(colorName(whiteToMove))
+                        .arg(colorName(!whiteToMove)));
+        else if (whiteToMove == m_playerWhite)
+            endGame(QStringLiteral("You ran out of time — Stockfish wins."));
+        else
+            endGame(QStringLiteral("Stockfish ran out of time — you win!"));
+    }
 }

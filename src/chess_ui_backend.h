@@ -6,6 +6,7 @@
 #include <QProcess>
 #include <QQueue>
 #include <QStringList>
+#include <QTimer>
 
 // The hand-written UI backend (universal authoring model). The *Plugin and
 // *Interface classes — Q_PLUGIN_METADATA, initLogos wiring, QtRO registration
@@ -17,6 +18,10 @@
 // attributed to a FIFO queue of pending requests — Stockfish answers commands
 // strictly in the order they were written to stdin, so the head of the queue
 // always owns the incoming line.
+//
+// Two modes: "engine" (vs Stockfish) and "table" (two humans, pass and play).
+// In table mode the engine is only the referee: it validates moves and tracks
+// state but never searches except for hints.
 class ChessUiBackend : public ChessUiSimpleSource,
                        public LogosUiPluginContext
 {
@@ -25,10 +30,14 @@ public:
     ~ChessUiBackend() override;
 
     // .rep SLOTs
-    void newGame(bool asWhite, int skillLevel, int moveTimeMs) override;
+    void newGame(QString gameMode, bool asWhite, int skillLevel, int timeControlMin) override;
     void playerMove(QString uciMove) override;
+    void typedMove(QString text) override;
     void undoMove() override;
     void requestHint() override;
+    void resign() override;
+    void agreeDraw() override;
+    void changeSkill(int level) override;
     void setEnginePath(QString path) override;
 
     void onContextReady() override;
@@ -41,6 +50,7 @@ private:
         int moveCount;  // position identity at send time (staleness check)
     };
 
+    // engine lifecycle
     void startEngine();
     void stopEngine();
     void engineFailed(const QString& reason);
@@ -53,26 +63,48 @@ private:
     void startThinking();
     void parseEval(const QString& line);
     void applyEngineMove(const QString& mv);
-    void rebuildHistory();
     bool searchPending() const;
     bool handshakePending() const;
+
+    // game state
+    void applyMove(const QString& uciMove);
+    void endGame(const QString& text);
+    void rebuildSanRows();
+    void updateMaterial();
+    void appendLog(const QString& line);
+    void applySkillWhenIdle();
     QString sideToMove() const;
     bool isPlayersTurn() const;
+    bool tableMode() const { return m_mode == QLatin1String("table"); }
+    QString colorName(bool white) const;
+
+    // clock
+    void tickClock();
+    bool clockActive() const;
 
     QProcess m_proc;
+    QTimer m_clockTimer;
     QQueue<Pending> m_queue;
     QStringList m_moves;           // game history, UCI notation
+    QStringList m_sans;            // SAN parallel to m_moves (suffix patched late)
     QStringList m_collectedMoves;  // legal moves accumulated from perft output
+    QStringList m_legalSanList;    // SAN parallel to m_collectedMoves
     QStringList m_fenKeys;         // repetition keys, index = plies played
+    QStringList m_logLines;
+    QString m_mode = QStringLiteral("engine");
     QString m_pendingFen;
     QString m_pendingCheckers;
     QString m_enginePathUsed;
     bool m_playerWhite = true;
-    int m_skill = 5;
-    int m_moveTimeMs = 900;
+    int m_skill = 4;
+    int m_moveTimeMs = 540;
     int m_gen = 0;
     int m_startId = 0;  // identity of the current engine launch, for the handshake timeout
+    qint64 m_whiteMs = 600000;
+    qint64 m_blackMs = 600000;
+    bool m_untimed = false;
     bool m_engineRunning = false;
     bool m_deferredSetup = false;  // newGame arrived mid-search; run setup after bestmove
+    bool m_skillDirty = false;     // setSkill arrived mid-search; apply after bestmove
     bool m_quitting = false;
 };
