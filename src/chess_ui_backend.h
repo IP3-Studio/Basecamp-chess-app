@@ -43,6 +43,8 @@ public:
     void joinOnlineGame(QString code, QString name) override;
     void leaveOnlineGame() override;
     void sendChat(QString text) override;
+    void joinLobby(QString name) override;
+    void sendLobbyChat(QString text) override;
 
     void onContextReady() override;
 
@@ -92,7 +94,10 @@ private:
     void teardownOnline(bool notifyPeer);
     void subscribeTopic();
     void publishJson(const QVariantMap& obj);
+    void publishTo(const QString& topic, const QVariantMap& obj);
     void handleDeliveryMessage(const QByteArray& payload);
+    void handleLobbyMessage(const QByteArray& payload);
+    void appendLobby(const QString& line);
     void startOnlineMatch(bool asWhite, int tcMs);
     void sendBeacon();
     void enterOnlineError(const QString& detail);
@@ -140,4 +145,8 @@ private:
     bool m_eventsArmed = false;
     bool m_drawOffered = false;
     bool m_peerOfferedDraw = false;
+
+    // lobby chat (ephemeral, fixed topic)
+    QStringList m_lobbyLines;
+    bool m_lobbyJoined = false;
 };

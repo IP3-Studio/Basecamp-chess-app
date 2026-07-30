@@ -13,6 +13,8 @@ class ChessUi
     SLOT(void joinOnlineGame(QString code, QString name))
     SLOT(void leaveOnlineGame())
     SLOT(void sendChat(QString text))
+    SLOT(void joinLobby(QString name))
+    SLOT(void sendLobbyChat(QString text))
 
     PROP(QString mode="engine" READONLY)
     PROP(QString fen="" READONLY)
@@ -38,6 +40,8 @@ class ChessUi
     PROP(QString gameCode="" READONLY)
     PROP(QString peerName="" READONLY)
     PROP(QString chatLog="" READONLY)
+    PROP(QString lobbyState="offline" READONLY)
+    PROP(QString lobbyLog="" READONLY)
 
     SIGNAL(hintReady(QString uciMove))
 }

@@ -40,6 +40,8 @@ Item {
     readonly property string gameCode: ready && backend && backend.gameCode ? backend.gameCode : ""
     readonly property string peerName: ready && backend && backend.peerName ? backend.peerName : ""
     readonly property string chatLog: ready && backend && backend.chatLog ? backend.chatLog : ""
+    readonly property string lobbyState: ready && backend && backend.lobbyState ? backend.lobbyState : "offline"
+    readonly property string lobbyLog: ready && backend && backend.lobbyLog ? backend.lobbyLog : ""
 
     // --- local UI state ---
     property bool flipped: false
@@ -56,6 +58,21 @@ Item {
     property bool hintPending: false
     property string promoFrom: ""
     property string promoTo: ""
+    // Dialog state — drawn as in-scene overlays (Popup/Overlay does not paint
+    // reliably inside Basecamp's embedded QQuickWidget).
+    property bool showNewGame: false
+    property string newGameMode: "engine"
+    property bool showPromo: false
+    property int dlgTimeIdx: 2
+    readonly property var timeMins: [3, 5, 10, 30, 0]
+
+    function openNewGame(m) {
+        newGameMode = m
+        dlgSkill.value = skill
+        var idx = timeMins.indexOf(nextTimeMin)
+        dlgTimeIdx = idx === -1 ? 2 : idx
+        showNewGame = true
+    }
 
     // --- derived ---
     readonly property bool tableMode: mode === "table"
@@ -194,7 +211,7 @@ Item {
         } else if (legalList.indexOf(mv + "q") !== -1) {
             promoFrom = selected
             promoTo = sq
-            promoPopup.open()
+            root.showPromo = true
         } else {
             selected = ""
         }
@@ -254,6 +271,10 @@ Item {
         id: db
         property bool danger: false
         font.pixelSize: 12
+        leftPadding: 12
+        rightPadding: 12
+        topPadding: 7
+        bottomPadding: 7
         contentItem: Text {
             text: db.text
             font: db.font
@@ -263,7 +284,7 @@ Item {
             elide: Text.ElideRight
         }
         background: Rectangle {
-            implicitHeight: 32
+            implicitHeight: 30
             radius: 6
             color: db.down ? "#262B31" : db.hovered ? "#22262B" : "#1D2126"
             border.color: root.cBorder
@@ -272,8 +293,10 @@ Item {
     component DarkField: TextField {
         color: root.cText
         placeholderTextColor: "#4E5762"
+        leftPadding: 10
+        rightPadding: 10
         background: Rectangle {
-            implicitHeight: 30
+            implicitHeight: 32
             radius: 6
             color: "#10131A"
             border.color: parent.activeFocus ? root.cAccent : root.cBorder
@@ -329,8 +352,7 @@ Item {
                                 anchors.fill: parent
                                 onClicked: {
                                     if (root.mode !== parent.modelData.m) {
-                                        newGameDialog.dialogMode = parent.modelData.m
-                                        newGameDialog.open()
+root.openNewGame(parent.modelData.m)
                                     }
                                 }
                             }
@@ -533,7 +555,7 @@ Item {
                     Layout.fillWidth: true
                     text: "New game"
                     enabled: root.ready
-                    onClicked: { newGameDialog.dialogMode = root.mode; newGameDialog.open() }
+                    onClicked: root.openNewGame(root.mode)
                 }
                 DarkButton {
                     Layout.fillWidth: true
@@ -558,40 +580,49 @@ Item {
         }
 
         // ==================================================================
-        // Eval bar + board, packed beside the left column; the board is sized
-        // from the root so content can never exceed the canvas Basecamp gives.
+        // Center region — fills the space between the two fixed columns and
+        // centres the board in it, so the board is the middle of the window
+        // with balanced margins on both sides.
+        Item {
+            id: centerRegion
+            Layout.fillWidth: true
+            Layout.fillHeight: true
 
-        // Eval bar (engine mode)
-        Rectangle {
-            Layout.alignment: Qt.AlignVCenter
-            visible: !root.tableMode && !root.onlineGame && root.showEvalBar
-            implicitWidth: 8
-            implicitHeight: boardFrame.height - 12
-            radius: 4
-            color: "#1D1F22"
-            border.color: root.cBorder
-            Rectangle {
-                id: evalFill
-                width: parent.width - 2
-                x: 1
-                radius: 3
-                color: "#E8EAED"
-                readonly property real frac: Math.max(0.04, Math.min(0.96,
-                    0.5 + root.evalCp / 3200))
-                height: (parent.height - 2) * frac
-                y: root.whiteAtBottom ? parent.height - 1 - height : 1
-                Behavior on height { NumberAnimation { duration: 300 } }
-            }
-        }
+            Row {
+                anchors.centerIn: parent
+                spacing: 10
 
-        Rectangle {
-            id: boardFrame
-            Layout.alignment: Qt.AlignVCenter
-            readonly property int cell: Math.max(24, Math.floor(
-                Math.min(root.height - 84,
-                         root.width - root.leftW - root.panelW - 92) / 8))
-            implicitWidth: cell * 8 + 8
-            implicitHeight: cell * 8 + 8
+                // Eval bar (engine mode)
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: !root.tableMode && !root.onlineGame && root.showEvalBar
+                    width: 8
+                    height: boardFrame.height - 12
+                    radius: 4
+                    color: "#1D1F22"
+                    border.color: root.cBorder
+                    Rectangle {
+                        id: evalFill
+                        width: parent.width - 2
+                        x: 1
+                        radius: 3
+                        color: "#E8EAED"
+                        readonly property real frac: Math.max(0.04, Math.min(0.96,
+                            0.5 + root.evalCp / 3200))
+                        height: (parent.height - 2) * frac
+                        y: root.whiteAtBottom ? parent.height - 1 - height : 1
+                        Behavior on height { NumberAnimation { duration: 300 } }
+                    }
+                }
+
+                Rectangle {
+                    id: boardFrame
+                    anchors.verticalCenter: parent.verticalCenter
+                    readonly property int cell: Math.max(24, Math.floor(
+                        Math.min(centerRegion.height - 20,
+                                 centerRegion.width - 30) / 8))
+                    width: cell * 8 + 8
+                    height: cell * 8 + 8
                     color: "#10131A"
                     radius: 6
                     border.color: root.cBorder
@@ -718,12 +749,12 @@ Item {
                             }
                         }
                     }
+                }
+            }
         }
 
-        Item { Layout.fillWidth: true }
-
         // ==================================================================
-        // Right panel — slim, the board keeps the space
+        // Right panel — fixed width, pinned to the right edge
         Rectangle {
             Layout.preferredWidth: root.panelW
             Layout.maximumWidth: root.panelW
@@ -740,23 +771,23 @@ Item {
                 // Tabs
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: 6
+                    spacing: 3
                     Repeater {
-                        model: [root.onlineGame ? "CHAT" : root.tableMode ? "TABLE" : "ENGINE",
-                                "MOVES", "SETTINGS"]
+                        model: [root.onlineGame ? "GAME" : root.tableMode ? "TABLE" : "ENGINE",
+                                "MOVES", "CHAT", "SETTINGS"]
                         Rectangle {
                             required property string modelData
                             required property int index
                             Layout.fillWidth: true
-                            height: 34
+                            height: 32
                             radius: 6
                             color: rightStack.currentIndex === index ? root.cCardAlt : "transparent"
                             border.color: rightStack.currentIndex === index ? root.cBorder : "transparent"
                             Text {
                                 anchors.centerIn: parent
                                 text: parent.modelData
-                                font.pixelSize: 10
-                                font.letterSpacing: 2
+                                font.pixelSize: 9
+                                font.letterSpacing: 0.5
                                 color: rightStack.currentIndex === index ? root.cText : root.cMuted
                             }
                             MouseArea {
@@ -988,60 +1019,38 @@ Item {
                                 }
                             }
 
+                            // Live game feed here; the opponent chat lives in
+                            // the CHAT tab so it has room to breathe.
                             Flickable {
-                                id: chatFlick
+                                id: gameFeedFlick
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
-                                contentHeight: chatCol.height
+                                contentHeight: gameFeedCol.height
                                 clip: true
                                 onContentHeightChanged: contentY = Math.max(0, contentHeight - height)
                                 Column {
-                                    id: chatCol
-                                    width: chatFlick.width
+                                    id: gameFeedCol
+                                    width: gameFeedFlick.width
                                     spacing: 5
-                                    Repeater {
-                                        model: root.chatLog.length ? root.chatLog.split("\n") : []
-                                        Rectangle {
-                                            required property string modelData
-                                            width: Math.min(chatCol.width - 12, chatText.implicitWidth + 20)
-                                            height: chatText.implicitHeight + 12
-                                            radius: 8
-                                            color: modelData.indexOf("You:") === 0 ? "#22303A" : root.cCardAlt
-                                            border.color: root.cBorder
-                                            Text {
-                                                id: chatText
-                                                anchors.fill: parent
-                                                anchors.margins: 6
-                                                text: parent.modelData
-                                                wrapMode: Text.WordWrap
-                                                color: parent.modelData.indexOf("·") === 0
-                                                       ? root.cMuted : root.cText
-                                                font.pixelSize: 12
-                                            }
-                                        }
+                                    Text {
+                                        width: gameFeedCol.width
+                                        text: root.statusText !== "" ? root.statusText
+                                            : "Host a game or join with a code."
+                                        wrapMode: Text.WordWrap
+                                        color: root.cText
+                                        font.pixelSize: 12
                                     }
                                     Text {
-                                        visible: root.chatLog === ""
-                                        text: "Chat with your opponent here."
-                                        font.pixelSize: 11
+                                        visible: root.onlineState === "playing"
+                                        width: gameFeedCol.width
+                                        text: "💬  Chat with " + (root.peerName || "your opponent")
+                                              + " in the CHAT tab."
+                                        wrapMode: Text.WordWrap
                                         color: root.cMuted
-                                    }
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 6
-                                DarkField {
-                                    id: chatInput
-                                    Layout.fillWidth: true
-                                    enabled: root.onlineState === "playing"
-                                    placeholderText: "say something…"
-                                    font.pixelSize: 12
-                                    onAccepted: {
-                                        if (text.trim().length) {
-                                            root.backend.sendChat(text)
-                                            text = ""
+                                        font.pixelSize: 11
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            onClicked: rightStack.currentIndex = 2
                                         }
                                     }
                                 }
@@ -1156,7 +1165,138 @@ Item {
                         }
                     }
 
-                    // ------------------------------------------------- tab 2: settings
+                    // ------------------------------------------------- tab 2: chat
+                    // Context-aware: during an online game it is the private
+                    // chat with your opponent; otherwise the shared lobby.
+                    // Both are ephemeral — nothing is stored, messages exist
+                    // only while you are subscribed.
+                    ColumnLayout {
+                        id: chatTab
+                        spacing: 8
+                        readonly property bool gameChat: root.onlineGame && root.onlineState === "playing"
+                        readonly property string feed: gameChat ? root.chatLog : root.lobbyLog
+
+                        // Header
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Text {
+                                Layout.fillWidth: true
+                                text: chatTab.gameChat
+                                    ? "Chat with " + (root.peerName || "opponent")
+                                    : "Lobby"
+                                font.pixelSize: 13
+                                font.bold: true
+                                color: root.cText
+                            }
+                            Text {
+                                text: "ephemeral"
+                                font.pixelSize: 9
+                                font.letterSpacing: 1
+                                color: root.cMuted
+                            }
+                        }
+
+                        // Lobby join gate (not shown for in-game chat)
+                        ColumnLayout {
+                            visible: !chatTab.gameChat && root.lobbyState !== "on"
+                            Layout.fillWidth: true
+                            spacing: 8
+                            Text {
+                                Layout.fillWidth: true
+                                text: "One shared room for everyone running Logos Chess. "
+                                      + "Meet an opponent, then start an online game with a shared code."
+                                wrapMode: Text.WordWrap
+                                font.pixelSize: 11
+                                color: root.cMuted
+                            }
+                            DarkField {
+                                id: lobbyNameField
+                                Layout.fillWidth: true
+                                placeholderText: "Your name"
+                                font.pixelSize: 12
+                            }
+                            DarkButton {
+                                Layout.fillWidth: true
+                                text: root.lobbyState === "starting" ? "Joining…" : "Join the lobby"
+                                enabled: root.ready && root.lobbyState !== "starting"
+                                onClicked: root.backend.joinLobby(lobbyNameField.text)
+                            }
+                            Text {
+                                visible: root.lobbyState === "error"
+                                Layout.fillWidth: true
+                                text: root.lobbyLog.split("\n").pop() || "Could not join."
+                                wrapMode: Text.WordWrap
+                                font.pixelSize: 11
+                                color: root.cRed
+                            }
+                            Item { Layout.fillHeight: true }
+                        }
+
+                        // Message feed (game chat, or lobby once joined)
+                        Flickable {
+                            id: chatFeedFlick
+                            visible: chatTab.gameChat || root.lobbyState === "on"
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            contentHeight: chatFeedCol.height
+                            clip: true
+                            onContentHeightChanged: contentY = Math.max(0, contentHeight - height)
+                            Column {
+                                id: chatFeedCol
+                                width: chatFeedFlick.width
+                                spacing: 5
+                                Repeater {
+                                    model: chatTab.feed.length
+                                           ? chatTab.feed.split("\n") : []
+                                    Rectangle {
+                                        required property string modelData
+                                        width: Math.min(chatFeedCol.width - 12, feedText.implicitWidth + 20)
+                                        height: feedText.implicitHeight + 12
+                                        radius: 8
+                                        color: modelData.indexOf("You:") === 0 ? "#22303A" : root.cCardAlt
+                                        border.color: root.cBorder
+                                        Text {
+                                            id: feedText
+                                            anchors.fill: parent
+                                            anchors.margins: 6
+                                            text: parent.modelData
+                                            wrapMode: Text.WordWrap
+                                            color: parent.modelData.indexOf("·") === 0
+                                                   ? root.cMuted : root.cText
+                                            font.pixelSize: 12
+                                        }
+                                    }
+                                }
+                                Text {
+                                    visible: chatTab.feed === ""
+                                    text: "No messages yet."
+                                    font.pixelSize: 11
+                                    color: root.cMuted
+                                }
+                            }
+                        }
+
+                        // Composer
+                        DarkField {
+                            visible: chatTab.gameChat || root.lobbyState === "on"
+                            Layout.fillWidth: true
+                            placeholderText: chatTab.gameChat
+                                ? "message " + (root.peerName || "your opponent") + "…"
+                                : "say something to the lobby…"
+                            font.pixelSize: 12
+                            onAccepted: {
+                                if (text.trim().length) {
+                                    if (chatTab.gameChat)
+                                        root.backend.sendChat(text)
+                                    else
+                                        root.backend.sendLobbyChat(text)
+                                    text = ""
+                                }
+                            }
+                        }
+                    }
+
+                    // ------------------------------------------------- tab 3: settings
                     ColumnLayout {
                         spacing: 12
 
@@ -1296,153 +1436,202 @@ Item {
     }
 
     // ----------------------------------------------------------------------
-    // New-game dialog
-    Popup {
-        id: newGameDialog
-        modal: true
-        parent: Overlay.overlay
-        x: Math.round((parent.width - width) / 2)
-        y: Math.round((parent.height - height) / 2)
-        padding: 20
-        background: Rectangle {
+    // New-game dialog — in-scene overlay (last child of root paints on top)
+    Item {
+        anchors.fill: parent
+        visible: root.showNewGame
+        z: 100
+
+        Rectangle {
+            anchors.fill: parent
+            color: "#000000"
+            opacity: 0.6
+            MouseArea { anchors.fill: parent; onClicked: root.showNewGame = false }
+        }
+
+        Rectangle {
+            width: 340
+            anchors.centerIn: parent
+            height: dlgCol.implicitHeight + 40
             radius: 12
             color: root.cCard
             border.color: root.cBorder
-        }
-        property string dialogMode: "engine"
-        onAboutToShow: {
-            dlgSkill.value = root.skill
-            timeCombo.currentIndex = [3, 5, 10, 30, 0].indexOf(root.nextTimeMin) === -1
-                ? 2 : [3, 5, 10, 30, 0].indexOf(root.nextTimeMin)
-        }
-
-        contentItem: ColumnLayout {
-            spacing: 12
-
-            Text {
-                text: newGameDialog.dialogMode === "table" ? "New game — two players"
-                    : newGameDialog.dialogMode === "online" ? "Play online"
-                    : "New game — vs Stockfish"
-                font.pixelSize: 16
-                font.bold: true
-                color: root.cText
-            }
+            MouseArea { anchors.fill: parent }  // swallow scrim clicks
 
             ColumnLayout {
-                visible: newGameDialog.dialogMode === "online"
-                spacing: 8
-                DarkField {
-                    id: onlineNameField
-                    Layout.fillWidth: true
-                    placeholderText: "Your name"
-                    font.pixelSize: 12
-                }
-                RowLayout {
-                    spacing: 6
-                    DarkField {
-                        id: onlineCodeField
-                        Layout.fillWidth: true
-                        placeholderText: "game code (share it with your opponent)"
-                        font.pixelSize: 12
-                    }
-                    DarkButton {
-                        text: "random"
-                        onClicked: onlineCodeField.text =
-                            Math.random().toString(36).slice(2, 8)
-                    }
-                }
-                Text {
-                    Layout.fillWidth: true
-                    text: "Both players enter the same code — one hosts, the other joins. "
-                          + "Moves and chat travel over Logos Delivery, peer to peer."
-                    wrapMode: Text.WordWrap
-                    font.pixelSize: 10
-                    color: root.cMuted
-                }
-            }
+                id: dlgCol
+                anchors.fill: parent
+                anchors.margins: 20
+                spacing: 12
 
-            RowLayout {
-                visible: newGameDialog.dialogMode !== "table"
-                spacing: 8
-                RadioButton { id: whiteRadio; text: "White"; checked: true }
-                RadioButton { id: blackRadio; text: "Black" }
-                RadioButton {
-                    id: randomRadio
-                    visible: newGameDialog.dialogMode === "engine"
-                    text: "Random"
-                }
-            }
-
-            ColumnLayout {
-                visible: newGameDialog.dialogMode === "engine"
-                spacing: 4
                 Text {
-                    text: "Strength: " + Math.round(dlgSkill.value)
-                          + " · " + root.strengthLabel(Math.round(dlgSkill.value))
-                    font.pixelSize: 12
+                    text: root.newGameMode === "table" ? "New game — two players"
+                        : root.newGameMode === "online" ? "Play online"
+                        : "New game — vs Stockfish"
+                    font.pixelSize: 16
+                    font.bold: true
                     color: root.cText
                 }
-                Slider {
-                    id: dlgSkill
+
+                ColumnLayout {
+                    visible: root.newGameMode === "online"
                     Layout.fillWidth: true
-                    Layout.minimumWidth: 260
-                    from: 0
-                    to: 20
-                    stepSize: 1
-                    snapMode: Slider.SnapAlways
-                    value: 4
-                }
-            }
-
-            RowLayout {
-                spacing: 8
-                Text { text: "Time control"; font.pixelSize: 12; color: root.cText }
-                ComboBox {
-                    id: timeCombo
-                    Layout.preferredWidth: 140
-                    model: ["3 min", "5 min", "10 min", "30 min", "Untimed"]
-                    currentIndex: 2
-                }
-            }
-
-            RowLayout {
-                Layout.alignment: Qt.AlignRight
-                spacing: 8
-                DarkButton { text: "Cancel"; onClicked: newGameDialog.close() }
-                DarkButton {
-                    visible: newGameDialog.dialogMode === "online"
-                    text: "Join game"
-                    enabled: root.ready && onlineCodeField.text.trim() !== ""
-                    onClicked: {
-                        root.backend.joinOnlineGame(onlineCodeField.text,
-                                                    onlineNameField.text)
-                        newGameDialog.close()
+                    spacing: 8
+                    DarkField {
+                        id: onlineNameField
+                        Layout.fillWidth: true
+                        placeholderText: "Your name"
+                        font.pixelSize: 12
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+                        DarkField {
+                            id: onlineCodeField
+                            Layout.fillWidth: true
+                            placeholderText: "game code — share with your opponent"
+                            font.pixelSize: 12
+                        }
+                        DarkButton {
+                            text: "random"
+                            onClicked: onlineCodeField.text =
+                                Math.random().toString(36).slice(2, 8)
+                        }
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Both players enter the same code — one hosts, the other joins. "
+                              + "Moves and chat travel over Logos Delivery, peer to peer."
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 10
+                        color: root.cMuted
                     }
                 }
-                DarkButton {
-                    visible: newGameDialog.dialogMode === "online"
-                    text: "Host game"
-                    enabled: root.ready && onlineCodeField.text.trim() !== ""
-                    onClicked: {
-                        var mins = [3, 5, 10, 30, 0][timeCombo.currentIndex]
-                        root.nextTimeMin = mins
-                        root.backend.hostOnlineGame(onlineCodeField.text,
-                                                    whiteRadio.checked,
-                                                    mins, onlineNameField.text)
-                        newGameDialog.close()
+
+                RowLayout {
+                    visible: root.newGameMode !== "table"
+                    spacing: 8
+                    Text { text: "Play as"; font.pixelSize: 12; color: root.cText }
+                    Item { Layout.fillWidth: true }
+                    // Segmented colour picker (radio popups are fine, but chips
+                    // keep the whole dialog on one visual system).
+                    property string pick: "white"
+                    id: colorRow
+                    Repeater {
+                        model: root.newGameMode === "engine"
+                            ? [{k: "white", t: "White"}, {k: "black", t: "Black"}, {k: "random", t: "Random"}]
+                            : [{k: "white", t: "White"}, {k: "black", t: "Black"}]
+                        Rectangle {
+                            required property var modelData
+                            implicitWidth: chipText.implicitWidth + 20
+                            implicitHeight: 28
+                            radius: 6
+                            color: colorRow.pick === modelData.k ? root.cCardAlt : "transparent"
+                            border.color: colorRow.pick === modelData.k ? root.cAccent : root.cBorder
+                            Text {
+                                id: chipText
+                                anchors.centerIn: parent
+                                text: parent.modelData.t
+                                font.pixelSize: 12
+                                color: colorRow.pick === parent.modelData.k ? root.cText : root.cMuted
+                            }
+                            MouseArea { anchors.fill: parent; onClicked: colorRow.pick = parent.modelData.k }
+                        }
                     }
                 }
-                DarkButton {
-                    visible: newGameDialog.dialogMode !== "online"
-                    text: "Start"
-                    enabled: root.ready
-                    onClicked: {
-                        var mins = [3, 5, 10, 30, 0][timeCombo.currentIndex]
-                        var asWhite = newGameDialog.dialogMode === "table" ? true
-                            : (randomRadio.checked ? Math.random() < 0.5 : whiteRadio.checked)
-                        root.startGame(newGameDialog.dialogMode, asWhite,
-                                       Math.round(dlgSkill.value), mins)
-                        newGameDialog.close()
+
+                ColumnLayout {
+                    visible: root.newGameMode === "engine"
+                    Layout.fillWidth: true
+                    spacing: 4
+                    Text {
+                        text: "Strength: " + Math.round(dlgSkill.value)
+                              + " · " + root.strengthLabel(Math.round(dlgSkill.value))
+                        font.pixelSize: 12
+                        color: root.cText
+                    }
+                    Slider {
+                        id: dlgSkill
+                        Layout.fillWidth: true
+                        from: 0
+                        to: 20
+                        stepSize: 1
+                        snapMode: Slider.SnapAlways
+                        value: 4
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 4
+                    Text { text: "Time control"; font.pixelSize: 12; color: root.cText }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 4
+                        Repeater {
+                            model: ["3 min", "5 min", "10 min", "30 min", "∞"]
+                            Rectangle {
+                                required property string modelData
+                                required property int index
+                                Layout.fillWidth: true
+                                implicitHeight: 30
+                                radius: 6
+                                color: root.dlgTimeIdx === index ? root.cCardAlt : "transparent"
+                                border.color: root.dlgTimeIdx === index ? root.cAccent : root.cBorder
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: parent.modelData
+                                    font.pixelSize: 12
+                                    color: root.dlgTimeIdx === parent.index ? root.cText : root.cMuted
+                                }
+                                MouseArea { anchors.fill: parent; onClicked: root.dlgTimeIdx = parent.index }
+                            }
+                        }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 4
+                    spacing: 8
+                    Item { Layout.fillWidth: true }
+                    DarkButton { text: "Cancel"; onClicked: root.showNewGame = false }
+                    DarkButton {
+                        visible: root.newGameMode === "online"
+                        text: "Join"
+                        enabled: root.ready && onlineCodeField.text.trim() !== ""
+                        onClicked: {
+                            root.backend.joinOnlineGame(onlineCodeField.text,
+                                                        onlineNameField.text)
+                            root.showNewGame = false
+                        }
+                    }
+                    DarkButton {
+                        visible: root.newGameMode === "online"
+                        text: "Host"
+                        enabled: root.ready && onlineCodeField.text.trim() !== ""
+                        onClicked: {
+                            var mins = root.timeMins[root.dlgTimeIdx]
+                            root.nextTimeMin = mins
+                            root.backend.hostOnlineGame(onlineCodeField.text,
+                                                        colorRow.pick !== "black",
+                                                        mins, onlineNameField.text)
+                            root.showNewGame = false
+                        }
+                    }
+                    DarkButton {
+                        visible: root.newGameMode !== "online"
+                        text: "Start"
+                        enabled: root.ready
+                        onClicked: {
+                            var mins = root.timeMins[root.dlgTimeIdx]
+                            var asWhite = root.newGameMode === "table" ? true
+                                : (colorRow.pick === "random" ? Math.random() < 0.5
+                                   : colorRow.pick === "white")
+                            root.startGame(root.newGameMode, asWhite,
+                                           Math.round(dlgSkill.value), mins)
+                            root.showNewGame = false
+                        }
                     }
                 }
             }
@@ -1450,41 +1639,51 @@ Item {
     }
 
     // ----------------------------------------------------------------------
-    // Promotion picker
-    Popup {
-        id: promoPopup
-        modal: true
-        parent: Overlay.overlay
-        x: Math.round((parent.width - width) / 2)
-        y: Math.round((parent.height - height) / 2)
-        padding: 16
-        background: Rectangle {
+    // Promotion picker — in-scene overlay
+    Item {
+        anchors.fill: parent
+        visible: root.showPromo
+        z: 100
+
+        Rectangle {
+            anchors.fill: parent
+            color: "#000000"
+            opacity: 0.6
+            MouseArea {
+                anchors.fill: parent
+                onClicked: { root.showPromo = false; root.selected = "" }
+            }
+        }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: promoCol.implicitWidth + 32
+            height: promoCol.implicitHeight + 32
             radius: 12
             color: root.cCard
             border.color: root.cBorder
-        }
+            MouseArea { anchors.fill: parent }
 
-        contentItem: ColumnLayout {
-            spacing: 10
-            Text {
-                text: "Promote to"
-                font.pixelSize: 14
-                color: root.cText
-            }
-            RowLayout {
-                spacing: 8
-                Repeater {
-                    model: ["q", "r", "b", "n"]
-                    DarkButton {
-                        required property string modelData
-                        text: { var g = { "q": "♛", "r": "♜", "b": "♝", "n": "♞" }; return g[modelData] }
-                        font.pixelSize: 26
-                        implicitWidth: 52
-                        implicitHeight: 52
-                        onClicked: {
-                            root.backend.playerMove(root.promoFrom + root.promoTo + modelData)
-                            root.selected = ""
-                            promoPopup.close()
+            ColumnLayout {
+                id: promoCol
+                anchors.centerIn: parent
+                spacing: 10
+                Text { text: "Promote to"; font.pixelSize: 14; color: root.cText }
+                RowLayout {
+                    spacing: 8
+                    Repeater {
+                        model: ["q", "r", "b", "n"]
+                        DarkButton {
+                            required property string modelData
+                            text: { var g = { "q": "♛", "r": "♜", "b": "♝", "n": "♞" }; return g[modelData] }
+                            font.pixelSize: 26
+                            implicitWidth: 52
+                            implicitHeight: 52
+                            onClicked: {
+                                root.backend.playerMove(root.promoFrom + root.promoTo + modelData)
+                                root.selected = ""
+                                root.showPromo = false
+                            }
                         }
                     }
                 }

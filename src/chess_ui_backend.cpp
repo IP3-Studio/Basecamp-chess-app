@@ -20,6 +20,7 @@ namespace {
 const QString kSettingsOrg = QStringLiteral("Logos");
 const QString kSettingsApp = QStringLiteral("chess_ui");
 const QString kEnginePathKey = QStringLiteral("enginePath");
+const QString kLobbyTopic = QStringLiteral("/logos-chess/1/lobby/json");
 const int kLogCap = 80;
 
 // Position identity for repetition counting: piece placement, side to move,
@@ -1021,6 +1022,8 @@ void ChessUiBackend::ensureDelivery(std::function<void(bool, QString)> done)
             [this](const QString&, const QString& contentTopic, QByteArray payload, int) {
                 if (!m_topic.isEmpty() && contentTopic == m_topic)
                     handleDeliveryMessage(payload);
+                else if (m_lobbyJoined && contentTopic == kLobbyTopic)
+                    handleLobbyMessage(payload);
             });
     }
     if (m_deliveryReady) {
@@ -1185,12 +1188,95 @@ void ChessUiBackend::publishJson(const QVariantMap& obj)
 {
     if (m_topic.isEmpty())
         return;
+    publishTo(m_topic, obj);
+}
+
+void ChessUiBackend::publishTo(const QString& topic, const QVariantMap& obj)
+{
     QVariantMap tagged = obj;
     tagged.insert(QStringLiteral("v"), 1);
     tagged.insert(QStringLiteral("from"), m_selfId);
     const QByteArray payload =
         QJsonDocument(QJsonObject::fromVariantMap(tagged)).toJson(QJsonDocument::Compact);
-    modules().delivery_module.sendAsync(m_topic, payload, [](LogosResult) {});
+    modules().delivery_module.sendAsync(topic, payload, [](LogosResult) {});
+}
+
+// ---------------------------------------------------------------------------
+// Lobby chat — one fixed topic shared by everyone running the app. Ephemeral
+// by construction: nothing is stored, you only see messages sent while you
+// are subscribed.
+
+void ChessUiBackend::appendLobby(const QString& line)
+{
+    m_lobbyLines << line;
+    while (m_lobbyLines.size() > 200)
+        m_lobbyLines.removeFirst();
+    setLobbyLog(m_lobbyLines.join(QLatin1Char('\n')));
+}
+
+void ChessUiBackend::joinLobby(QString name)
+{
+    if (m_lobbyJoined || lobbyState() == QLatin1String("starting"))
+        return;
+    const QString trimmed = name.trimmed().left(24);
+    if (!trimmed.isEmpty())
+        m_selfName = trimmed;
+    if (m_selfName.isEmpty())
+        m_selfName = QStringLiteral("Anon");
+    setLobbyState(QStringLiteral("starting"));
+    ensureDelivery([this](bool ok, QString detail) {
+        if (!ok) {
+            setLobbyState(QStringLiteral("error"));
+            appendLobby(QStringLiteral("· %1").arg(detail));
+            return;
+        }
+        modules().delivery_module.subscribeAsync(kLobbyTopic, [this](LogosResult r) {
+            if (!r.success) {
+                setLobbyState(QStringLiteral("error"));
+                appendLobby(QStringLiteral("· Could not join the lobby: %1").arg(r.getError()));
+                return;
+            }
+            m_lobbyJoined = true;
+            setLobbyState(QStringLiteral("on"));
+            appendLobby(QStringLiteral("· You joined the lobby as %1.").arg(m_selfName));
+            publishTo(kLobbyTopic, {{QStringLiteral("t"), QStringLiteral("join")},
+                                    {QStringLiteral("name"), m_selfName}});
+        });
+    });
+    QTimer::singleShot(10000, &m_proc, [this]() {
+        if (lobbyState() == QLatin1String("starting")) {
+            setLobbyState(QStringLiteral("error"));
+            appendLobby(QStringLiteral(
+                "· The delivery module is not responding — is delivery_module installed and loaded?"));
+        }
+    });
+}
+
+void ChessUiBackend::sendLobbyChat(QString text)
+{
+    const QString trimmed = text.trimmed().left(400);
+    if (trimmed.isEmpty() || !m_lobbyJoined)
+        return;
+    publishTo(kLobbyTopic, {{QStringLiteral("t"), QStringLiteral("chat")},
+                            {QStringLiteral("name"), m_selfName},
+                            {QStringLiteral("text"), trimmed}});
+    appendLobby(QStringLiteral("You: %1").arg(trimmed));
+}
+
+void ChessUiBackend::handleLobbyMessage(const QByteArray& payload)
+{
+    const QJsonObject msg = QJsonDocument::fromJson(payload).object();
+    if (msg.isEmpty() || msg.value(QStringLiteral("from")).toString() == m_selfId)
+        return;
+    const QString t = msg.value(QStringLiteral("t")).toString();
+    const QString name = msg.value(QStringLiteral("name")).toString();
+    const QString who = name.isEmpty() ? QStringLiteral("Someone") : name.left(24);
+    if (t == QLatin1String("chat"))
+        appendLobby(QStringLiteral("%1: %2")
+                        .arg(who)
+                        .arg(msg.value(QStringLiteral("text")).toString().left(400)));
+    else if (t == QLatin1String("join"))
+        appendLobby(QStringLiteral("· %1 joined the lobby.").arg(who));
 }
 
 void ChessUiBackend::handleDeliveryMessage(const QByteArray& payload)
