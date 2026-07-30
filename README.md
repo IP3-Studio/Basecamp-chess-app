@@ -78,8 +78,8 @@ Requires Nix with flakes ([install](https://nixos.org/download/)). Stockfish is
 pulled in automatically for Nix builds.
 
 ```bash
-git clone https://github.com/IP3-Studio/logos-chess
-cd logos-chess
+git clone https://github.com/IP3-Studio/Basecamp-chess-app
+cd Basecamp-chess-app
 nix build                      # compile the plugin
 nix run .                      # play it in logos-standalone-app
 nix build .#lgx-portable       # package a shareable .lgx for your platform
