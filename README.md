@@ -33,6 +33,37 @@ Online mode needs the `delivery_module` loaded in Basecamp (bundled
 automatically in the dev runner). Note that game topics are unencrypted: use
 a hard-to-guess code and keep the trash talk friendly.
 
+## What is Logos Basecamp?
+
+[Logos Basecamp](https://docs.logos.co/basecamp) is the desktop shell for
+[Logos](https://logos.co) — it bundles the kernel, the default modules, and the
+UI packages into one surface, so you can discover, install, and run Logos
+modules and apps from a graphical interface instead of the command line. Chess
+is one such app: it installs into Basecamp and runs inside it.
+
+**Get Basecamp:** download the latest release from
+[logos-co/logos-basecamp/releases/latest](https://github.com/logos-co/logos-basecamp/releases/latest).
+Releases are published as:
+
+| File | Platform |
+|---|---|
+| `LogosBasecamp-Desktop-v<ver>-<sha>-aarch64.dmg` | macOS Apple Silicon |
+| `LogosBasecamp-Desktop-v<ver>-<sha>-x86_64.AppImage` | Linux x86_64 |
+| `LogosBasecamp-Desktop-v<ver>-<sha>-aarch64.AppImage` | Linux ARM64 |
+
+On Linux, `chmod +x` the AppImage and run it — no installation needed. There is
+currently no macOS Intel build, so Intel Macs need to build Basecamp from
+source (it builds with Nix: `nix build '.#bin-appimage'`, see the
+[Basecamp repo](https://github.com/logos-co/logos-basecamp)).
+
+Further reading: [Basecamp docs](https://docs.logos.co/basecamp) ·
+[Get started with Logos](https://logos.co/get-started) ·
+[Logos on GitHub](https://github.com/logos-co)
+
+This app is developed against Basecamp 0.2.x (verified on 0.2.0-RC3). Online
+mode also needs the `delivery_module`, which ships with Basecamp's default
+module set — check **Modules** if you are unsure.
+
 ## Install
 
 ### 1. Install Stockfish
@@ -53,21 +84,34 @@ Or download from the
 ### 2. Install the module
 
 Download the `.lgx` for your platform from the
-[latest release](../../releases/latest) (macOS Apple Silicon, Linux x86_64,
-Linux ARM64), then in Basecamp open **Modules**, click **Install LGX Package**,
-and select the file. Load it from the Modules view and Chess appears with the
-pawn icon.
+[latest release](../../releases/latest):
 
-CLI alternative:
+| Asset | Platform | Variant inside |
+|---|---|---|
+| `chess_ui-darwin-arm64.lgx` | macOS Apple Silicon | `darwin-arm64` |
+| `chess_ui-linux-x86_64.lgx` | Linux x86_64 (Debian, Ubuntu, …) | `linux-amd64` |
+| `chess_ui-linux-aarch64.lgx` | Linux ARM64 | `linux-arm64` |
+
+Then in Basecamp open **Modules**, click **Install LGX Package**, select the
+file, and **Load** it. Chess appears with the pawn icon. This is the
+recommended route on every platform — it puts the plugin where Basecamp
+actually looks, with no path guessing.
+
+CLI alternative — note Basecamp resolves its data directory via Qt's
+`AppDataLocation`, so the base differs per platform (and a non-portable dev
+build appends `Dev`):
 
 ```bash
 # macOS
 BASECAMP_DIR="$HOME/Library/Application Support/Logos/LogosBasecamp"
 # Linux
-# BASECAMP_DIR="$HOME/.config/Logos/LogosBasecamp"
+# BASECAMP_DIR="$HOME/.local/share/Logos/LogosBasecamp"
 
-lgpm --modules-dir "$BASECAMP_DIR/modules" install --file chess_ui-darwin-arm64.lgx
+lgpm --modules-dir "$BASECAMP_DIR/modules" install --file chess_ui-linux-x86_64.lgx
 ```
+
+If Basecamp was launched with `--user-dir` (or `LOGOS_USER_DIR`), use that
+path as `BASECAMP_DIR` instead.
 
 Release assets are portable builds (self-contained, bundled support libraries).
 If your platform has no prebuilt asset yet, build from source below.
