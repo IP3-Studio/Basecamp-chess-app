@@ -4,6 +4,14 @@ import QtQuick.Layouts
 
 Item {
     id: root
+    // Basecamp sizes the MDI subwindow from the root's sizeHint — without
+    // these it falls back to arbitrary dimensions and the view gets clipped.
+    implicitWidth: 1080
+    implicitHeight: 700
+
+    // Adaptive chrome widths so small canvases keep a playable board.
+    readonly property int leftW: width < 1080 ? 168 : 190
+    readonly property int panelW: width < 1080 ? 236 : 264
 
     // Typed replica — auto-synced properties and callable slots.
     readonly property var backend: logos.module("chess_ui")
@@ -283,8 +291,8 @@ Item {
         // ==================================================================
         // Left column — kept slim so the board is the centrepiece
         ColumnLayout {
-            Layout.preferredWidth: 190
-            Layout.maximumWidth: 190
+            Layout.preferredWidth: root.leftW
+            Layout.maximumWidth: root.leftW
             Layout.fillHeight: true
             spacing: 8
 
@@ -550,44 +558,40 @@ Item {
         }
 
         // ==================================================================
-        // Center: eval bar + board
-        Item {
-            id: boardArea
-            Layout.fillWidth: true
-            Layout.fillHeight: true
+        // Eval bar + board, packed beside the left column; the board is sized
+        // from the root so content can never exceed the canvas Basecamp gives.
 
-            RowLayout {
-                anchors.centerIn: parent
-                spacing: 10
+        // Eval bar (engine mode)
+        Rectangle {
+            Layout.alignment: Qt.AlignVCenter
+            visible: !root.tableMode && !root.onlineGame && root.showEvalBar
+            implicitWidth: 8
+            implicitHeight: boardFrame.height - 12
+            radius: 4
+            color: "#1D1F22"
+            border.color: root.cBorder
+            Rectangle {
+                id: evalFill
+                width: parent.width - 2
+                x: 1
+                radius: 3
+                color: "#E8EAED"
+                readonly property real frac: Math.max(0.04, Math.min(0.96,
+                    0.5 + root.evalCp / 3200))
+                height: (parent.height - 2) * frac
+                y: root.whiteAtBottom ? parent.height - 1 - height : 1
+                Behavior on height { NumberAnimation { duration: 300 } }
+            }
+        }
 
-                // Eval bar (engine mode)
-                Rectangle {
-                    visible: !root.tableMode && !root.onlineGame && root.showEvalBar
-                    width: 8
-                    height: boardFrame.height - 12
-                    radius: 4
-                    color: "#1D1F22"
-                    border.color: root.cBorder
-                    Rectangle {
-                        id: evalFill
-                        width: parent.width - 2
-                        x: 1
-                        radius: 3
-                        color: "#E8EAED"
-                        readonly property real frac: Math.max(0.04, Math.min(0.96,
-                            0.5 + root.evalCp / 3200))
-                        height: (parent.height - 2) * frac
-                        y: root.whiteAtBottom ? parent.height - 1 - height : 1
-                        Behavior on height { NumberAnimation { duration: 300 } }
-                    }
-                }
-
-                Rectangle {
-                    id: boardFrame
-                    readonly property int cell: Math.max(28, Math.floor(
-                        Math.min(boardArea.width - 12, boardArea.height - 12) / 8))
-                    width: cell * 8 + 8
-                    height: cell * 8 + 8
+        Rectangle {
+            id: boardFrame
+            Layout.alignment: Qt.AlignVCenter
+            readonly property int cell: Math.max(24, Math.floor(
+                Math.min(root.height - 84,
+                         root.width - root.leftW - root.panelW - 92) / 8))
+            implicitWidth: cell * 8 + 8
+            implicitHeight: cell * 8 + 8
                     color: "#10131A"
                     radius: 6
                     border.color: root.cBorder
@@ -714,15 +718,15 @@ Item {
                             }
                         }
                     }
-                }
-            }
         }
+
+        Item { Layout.fillWidth: true }
 
         // ==================================================================
         // Right panel — slim, the board keeps the space
         Rectangle {
-            Layout.preferredWidth: 264
-            Layout.maximumWidth: 264
+            Layout.preferredWidth: root.panelW
+            Layout.maximumWidth: root.panelW
             Layout.fillHeight: true
             radius: 10
             color: root.cCard
