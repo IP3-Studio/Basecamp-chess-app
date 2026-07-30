@@ -1,7 +1,7 @@
 {
   "name": "chess_ui",
   "display_name": "Chess",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "ui_qml",
   "interface": "universal",
   "category": "games",
@@ -9,7 +9,7 @@
   "main": "chess_ui_plugin",
   "icon": "icons/chess.png",
   "view": "qml/Main.qml",
-  "dependencies": [],
+  "dependencies": ["delivery_module"],
   "codegen": { "rep": "src/chess_ui.rep" },
 
   "nix": {

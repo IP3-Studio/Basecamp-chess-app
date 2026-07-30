@@ -27,6 +27,11 @@ Item {
     readonly property int clockWhiteMs: ready && backend && backend.clockWhiteMs !== undefined ? backend.clockWhiteMs : 0
     readonly property int clockBlackMs: ready && backend && backend.clockBlackMs !== undefined ? backend.clockBlackMs : 0
     readonly property string material: ready && backend && backend.material ? backend.material : "Level"
+    readonly property string onlineState: ready && backend && backend.onlineState ? backend.onlineState : "offline"
+    readonly property string onlineInfo: ready && backend && backend.onlineInfo ? backend.onlineInfo : ""
+    readonly property string gameCode: ready && backend && backend.gameCode ? backend.gameCode : ""
+    readonly property string peerName: ready && backend && backend.peerName ? backend.peerName : ""
+    readonly property string chatLog: ready && backend && backend.chatLog ? backend.chatLog : ""
 
     // --- local UI state ---
     property bool flipped: false
@@ -46,6 +51,7 @@ Item {
 
     // --- derived ---
     readonly property bool tableMode: mode === "table"
+    readonly property bool onlineGame: mode === "online"
     readonly property string sideToMove: fen.split(" ").length > 1 ? fen.split(" ")[1] : "w"
     readonly property bool whiteAtBottom: tableMode
         ? (turnBoard ? sideToMove === "w" : !flipped)
@@ -55,6 +61,7 @@ Item {
     readonly property bool myTurn: gameState === "playerTurn" && !hintPending
     readonly property bool gameActive: gameState === "playerTurn"
         || gameState === "engineThinking" || gameState === "working"
+        || gameState === "opponentTurn"
     readonly property bool untimed: clockWhiteMs <= 0 && clockBlackMs <= 0
         && gameState !== "gameOver"
     readonly property int plies: {
@@ -233,26 +240,58 @@ Item {
         }
     }
 
+    // Dark-styled controls; the default Basic style ships light-gray chrome
+    // that fights the theme.
+    component DarkButton: Button {
+        id: db
+        property bool danger: false
+        font.pixelSize: 12
+        contentItem: Text {
+            text: db.text
+            font: db.font
+            color: !db.enabled ? "#4A5057" : db.danger ? root.cRed : root.cText
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+        }
+        background: Rectangle {
+            implicitHeight: 32
+            radius: 6
+            color: db.down ? "#262B31" : db.hovered ? "#22262B" : "#1D2126"
+            border.color: root.cBorder
+        }
+    }
+    component DarkField: TextField {
+        color: root.cText
+        placeholderTextColor: "#4E5762"
+        background: Rectangle {
+            implicitHeight: 30
+            radius: 6
+            color: "#10131A"
+            border.color: parent.activeFocus ? root.cAccent : root.cBorder
+        }
+    }
+
     Rectangle { anchors.fill: parent; color: root.cBg }
 
     RowLayout {
         anchors.fill: parent
-        anchors.margins: 16
-        anchors.bottomMargin: 34
-        spacing: 16
+        anchors.margins: 12
+        anchors.bottomMargin: 32
+        spacing: 12
 
         // ==================================================================
-        // Left column
+        // Left column — kept slim so the board is the centrepiece
         ColumnLayout {
-            Layout.preferredWidth: 252
-            Layout.maximumWidth: 252
+            Layout.preferredWidth: 190
+            Layout.maximumWidth: 190
             Layout.fillHeight: true
-            spacing: 10
+            spacing: 8
 
             // Mode switch
             Rectangle {
                 Layout.fillWidth: true
-                height: 40
+                height: 36
                 radius: 8
                 color: root.cCard
                 border.color: root.cBorder
@@ -261,8 +300,9 @@ Item {
                     anchors.margins: 4
                     spacing: 4
                     Repeater {
-                        model: [{ label: "TWO PLAYERS", m: "table" },
-                                { label: "VS STOCKFISH", m: "engine" }]
+                        model: [{ label: "TABLE", m: "table" },
+                                { label: "ENGINE", m: "engine" },
+                                { label: "ONLINE", m: "online" }]
                         Rectangle {
                             required property var modelData
                             Layout.fillWidth: true
@@ -273,8 +313,8 @@ Item {
                             Text {
                                 anchors.centerIn: parent
                                 text: parent.modelData.label
-                                font.pixelSize: 10
-                                font.letterSpacing: 1.5
+                                font.pixelSize: 9
+                                font.letterSpacing: 1
                                 color: root.mode === parent.modelData.m ? root.cText : root.cMuted
                             }
                             MouseArea {
@@ -295,7 +335,7 @@ Item {
             Rectangle {
                 id: topCard
                 Layout.fillWidth: true
-                Layout.preferredHeight: 108
+                Layout.preferredHeight: 96
                 radius: 10
                 color: root.cCard
                 border.color: root.whiteAtBottom
@@ -312,8 +352,10 @@ Item {
                             Layout.fillWidth: true
                             text: root.tableMode
                                 ? (topCard.showsWhite ? root.whiteName : root.blackName)
-                                : (topCard.showsWhite === root.playerIsWhite ? "You" : root.engineName)
-                            font.pixelSize: 15
+                                : (topCard.showsWhite === root.playerIsWhite ? "You"
+                                   : root.onlineGame
+                                     ? (root.peerName || "Opponent") : root.engineName)
+                            font.pixelSize: 14
                             font.bold: true
                             color: root.cText
                             elide: Text.ElideRight
@@ -327,9 +369,12 @@ Item {
                     Text {
                         text: root.tableMode
                             ? "on the board"
-                            : (topCard.showsWhite === root.playerIsWhite
-                               ? root.nextTimeMin + ":00 game"
-                               : "skill " + root.skill + " · " + root.strengthLabel(root.skill) + " · local")
+                            : root.onlineGame
+                              ? (topCard.showsWhite === root.playerIsWhite
+                                 ? "that's you" : "online · code " + root.gameCode)
+                              : (topCard.showsWhite === root.playerIsWhite
+                                 ? root.nextTimeMin + ":00 game"
+                                 : "skill " + root.skill + " · " + root.strengthLabel(root.skill) + " · local")
                         font.pixelSize: 10
                         color: root.cMuted
                     }
@@ -357,7 +402,7 @@ Item {
             Rectangle {
                 id: bottomCard
                 Layout.fillWidth: true
-                Layout.preferredHeight: 108
+                Layout.preferredHeight: 96
                 radius: 10
                 color: root.cCard
                 readonly property bool showsWhite: root.whiteAtBottom
@@ -373,8 +418,10 @@ Item {
                             Layout.fillWidth: true
                             text: root.tableMode
                                 ? (bottomCard.showsWhite ? root.whiteName : root.blackName)
-                                : (bottomCard.showsWhite === root.playerIsWhite ? "You" : root.engineName)
-                            font.pixelSize: 15
+                                : (bottomCard.showsWhite === root.playerIsWhite ? "You"
+                                   : root.onlineGame
+                                     ? (root.peerName || "Opponent") : root.engineName)
+                            font.pixelSize: 14
                             font.bold: true
                             color: root.cText
                             elide: Text.ElideRight
@@ -389,8 +436,10 @@ Item {
                         text: root.tableMode
                             ? "on the board"
                             : (bottomCard.showsWhite === root.playerIsWhite
-                               ? root.nextTimeMin + ":00 game · " + root.plies + " plies"
-                               : "skill " + root.skill + " · local")
+                               ? (root.untimed ? "" : root.nextTimeMin + ":00 game · ")
+                                 + root.plies + " plies"
+                               : root.onlineGame ? "online · code " + root.gameCode
+                                                 : "skill " + root.skill + " · local")
                         font.pixelSize: 10
                         color: root.cMuted
                     }
@@ -414,19 +463,21 @@ Item {
                 }
             }
 
-            // Evaluation (engine) / Material (table) card
+            // Evaluation (engine) / Material (table, online) card
             Rectangle {
+                id: statCard
                 Layout.fillWidth: true
-                Layout.preferredHeight: 96
+                Layout.preferredHeight: 84
                 radius: 10
                 color: root.cCard
                 border.color: root.cBorder
+                readonly property bool materialCard: root.tableMode || root.onlineGame
                 ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 12
                     spacing: 3
                     Text {
-                        text: root.tableMode ? "MATERIAL" : "EVALUATION"
+                        text: statCard.materialCard ? "MATERIAL" : "EVALUATION"
                         font.pixelSize: 9
                         font.letterSpacing: 2
                         color: root.cMuted
@@ -434,15 +485,15 @@ Item {
                     RowLayout {
                         spacing: 8
                         Text {
-                            text: root.tableMode
+                            text: statCard.materialCard
                                 ? root.material
                                 : (root.evalText.length ? root.evalText.split("  ·  ")[0] : "+0.00")
-                            font.pixelSize: 24
+                            font.pixelSize: 22
                             font.bold: true
                             color: root.cText
                         }
                         Text {
-                            text: root.tableMode
+                            text: statCard.materialCard
                                 ? (root.material === "Level" ? "even material" : "material edge")
                                 : (root.evalCp > 60 ? "White better"
                                    : root.evalCp < -60 ? "Black better" : "balanced")
@@ -451,7 +502,9 @@ Item {
                         }
                     }
                     Text {
-                        text: root.tableMode ? " "
+                        text: statCard.materialCard
+                            ? (root.onlineGame && root.gameState === "opponentTurn"
+                               ? "waiting for " + (root.peerName || "opponent") + "…" : " ")
                             : (root.gameState === "engineThinking" ? "engine thinking…"
                                : root.hintPending ? "calculating hint…" : "engine idle")
                         font.pixelSize: 10
@@ -468,26 +521,26 @@ Item {
                 Layout.fillWidth: true
                 columnSpacing: 8
                 rowSpacing: 8
-                Button {
+                DarkButton {
                     Layout.fillWidth: true
                     text: "New game"
                     enabled: root.ready
                     onClicked: { newGameDialog.dialogMode = root.mode; newGameDialog.open() }
                 }
-                Button {
+                DarkButton {
                     Layout.fillWidth: true
                     text: "Hint"
                     enabled: root.myTurn
                     onClicked: { root.hintPending = true; root.backend.requestHint() }
                 }
-                Button {
+                DarkButton {
                     Layout.fillWidth: true
                     text: "Undo"
                     enabled: (root.gameState === "playerTurn" || root.gameState === "gameOver")
-                             && root.sanRows !== "" && !root.hintPending
+                             && root.sanRows !== "" && !root.hintPending && !root.onlineGame
                     onClicked: root.backend.undoMove()
                 }
-                Button {
+                DarkButton {
                     Layout.fillWidth: true
                     text: "Flip"
                     enabled: !(root.tableMode && root.turnBoard)
@@ -509,7 +562,7 @@ Item {
 
                 // Eval bar (engine mode)
                 Rectangle {
-                    visible: !root.tableMode && root.showEvalBar
+                    visible: !root.tableMode && !root.onlineGame && root.showEvalBar
                     width: 8
                     height: boardFrame.height - 12
                     radius: 4
@@ -532,7 +585,7 @@ Item {
                 Rectangle {
                     id: boardFrame
                     readonly property int cell: Math.max(28, Math.floor(
-                        Math.min(boardArea.width - 60, boardArea.height - 40) / 8))
+                        Math.min(boardArea.width - 12, boardArea.height - 12) / 8))
                     width: cell * 8 + 8
                     height: cell * 8 + 8
                     color: "#10131A"
@@ -603,7 +656,7 @@ Item {
                                 Text {  // rank label
                                     visible: index % 8 === 0
                                     text: sq.charAt(1)
-                                    font.pixelSize: Math.max(9, Math.round(boardFrame.cell * 0.15))
+                                    font.pixelSize: Math.max(10, Math.round(boardFrame.cell * 0.18))
                                     color: lightSq ? root.cDarkSq : root.cLightSq
                                     anchors.left: parent.left
                                     anchors.top: parent.top
@@ -612,7 +665,7 @@ Item {
                                 Text {  // file label
                                     visible: Math.floor(index / 8) === 7
                                     text: sq.charAt(0)
-                                    font.pixelSize: Math.max(9, Math.round(boardFrame.cell * 0.15))
+                                    font.pixelSize: Math.max(10, Math.round(boardFrame.cell * 0.18))
                                     color: lightSq ? root.cDarkSq : root.cLightSq
                                     anchors.right: parent.right
                                     anchors.bottom: parent.bottom
@@ -649,11 +702,16 @@ Item {
                             horizontalAlignment: Text.AlignHCenter
                             anchors.horizontalCenter: parent.horizontalCenter
                         }
-                        Button {
-                            text: "play again ↺"
+                        DarkButton {
+                            text: root.onlineGame ? "leave game" : "play again ↺"
                             anchors.horizontalCenter: parent.horizontalCenter
-                            onClicked: root.startGame(root.mode, root.playerIsWhite,
-                                                      root.skill, root.nextTimeMin)
+                            onClicked: {
+                                if (root.onlineGame)
+                                    root.backend.leaveOnlineGame()
+                                else
+                                    root.startGame(root.mode, root.playerIsWhite,
+                                                   root.skill, root.nextTimeMin)
+                            }
                         }
                     }
                 }
@@ -661,10 +719,10 @@ Item {
         }
 
         // ==================================================================
-        // Right panel
+        // Right panel — slim, the board keeps the space
         Rectangle {
-            Layout.preferredWidth: 360
-            Layout.maximumWidth: 360
+            Layout.preferredWidth: 264
+            Layout.maximumWidth: 264
             Layout.fillHeight: true
             radius: 10
             color: root.cCard
@@ -680,7 +738,8 @@ Item {
                     Layout.fillWidth: true
                     spacing: 6
                     Repeater {
-                        model: [root.tableMode ? "TABLE" : "ENGINE", "MOVES", "SETTINGS"]
+                        model: [root.onlineGame ? "CHAT" : root.tableMode ? "TABLE" : "ENGINE",
+                                "MOVES", "SETTINGS"]
                         Rectangle {
                             required property string modelData
                             required property int index
@@ -715,9 +774,10 @@ Item {
                         spacing: 8
 
                         // Engine mode: commentary stream. Table mode: clock card.
+                        // Online mode: connection card + chat.
                         Flickable {
                             id: logFlick
-                            visible: !root.tableMode
+                            visible: !root.tableMode && !root.onlineGame
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             contentHeight: logCol.height
@@ -825,17 +885,17 @@ Item {
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: 8
-                                Button {
+                                DarkButton {
                                     Layout.fillWidth: true
                                     text: "Agree a draw"
                                     enabled: root.gameActive
                                     onClicked: root.backend.agreeDraw()
                                 }
-                                Button {
+                                DarkButton {
                                     Layout.fillWidth: true
                                     text: "Resign"
                                     enabled: root.gameActive
-                                    palette.buttonText: root.cRed
+                                    danger: true
                                     onClicked: root.backend.resign()
                                 }
                             }
@@ -857,14 +917,14 @@ Item {
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: 6
-                                TextField {
+                                DarkField {
                                     Layout.fillWidth: true
                                     placeholderText: "White's name"
                                     text: root.whiteName
                                     font.pixelSize: 11
                                     onEditingFinished: root.whiteName = text.trim() || "White"
                                 }
-                                TextField {
+                                DarkField {
                                     Layout.fillWidth: true
                                     placeholderText: "Black's name"
                                     text: root.blackName
@@ -876,9 +936,141 @@ Item {
                             Item { Layout.fillHeight: true }
                         }
 
+                        // Online mode: connection card, chat stream, actions
+                        ColumnLayout {
+                            visible: root.onlineGame
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            spacing: 8
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                implicitHeight: onlineInfoCol.implicitHeight + 20
+                                radius: 10
+                                color: root.cCardAlt
+                                border.color: root.onlineState === "error" ? root.cRed : root.cBorder
+                                ColumnLayout {
+                                    id: onlineInfoCol
+                                    anchors.fill: parent
+                                    anchors.margins: 10
+                                    spacing: 2
+                                    RowLayout {
+                                        Text {
+                                            text: root.onlineState === "playing" ? "● connected"
+                                                : root.onlineState === "waiting" ? "● waiting"
+                                                : root.onlineState === "joining" ? "● searching"
+                                                : root.onlineState === "starting" ? "● starting"
+                                                : root.onlineState === "error" ? "● error" : "● offline"
+                                            font.pixelSize: 10
+                                            color: root.onlineState === "playing" ? root.cGreen
+                                                 : root.onlineState === "error" ? root.cRed : root.cAccent
+                                        }
+                                        Item { Layout.fillWidth: true }
+                                        Text {
+                                            visible: root.gameCode !== ""
+                                            text: "code: " + root.gameCode
+                                            font.pixelSize: 10
+                                            color: root.cMuted
+                                        }
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: root.onlineInfo !== "" ? root.onlineInfo
+                                            : "Host a game or join with a code."
+                                        wrapMode: Text.WordWrap
+                                        font.pixelSize: 11
+                                        color: root.cText
+                                    }
+                                }
+                            }
+
+                            Flickable {
+                                id: chatFlick
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                contentHeight: chatCol.height
+                                clip: true
+                                onContentHeightChanged: contentY = Math.max(0, contentHeight - height)
+                                Column {
+                                    id: chatCol
+                                    width: chatFlick.width
+                                    spacing: 5
+                                    Repeater {
+                                        model: root.chatLog.length ? root.chatLog.split("\n") : []
+                                        Rectangle {
+                                            required property string modelData
+                                            width: Math.min(chatCol.width - 12, chatText.implicitWidth + 20)
+                                            height: chatText.implicitHeight + 12
+                                            radius: 8
+                                            color: modelData.indexOf("You:") === 0 ? "#22303A" : root.cCardAlt
+                                            border.color: root.cBorder
+                                            Text {
+                                                id: chatText
+                                                anchors.fill: parent
+                                                anchors.margins: 6
+                                                text: parent.modelData
+                                                wrapMode: Text.WordWrap
+                                                color: parent.modelData.indexOf("·") === 0
+                                                       ? root.cMuted : root.cText
+                                                font.pixelSize: 12
+                                            }
+                                        }
+                                    }
+                                    Text {
+                                        visible: root.chatLog === ""
+                                        text: "Chat with your opponent here."
+                                        font.pixelSize: 11
+                                        color: root.cMuted
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+                                DarkField {
+                                    id: chatInput
+                                    Layout.fillWidth: true
+                                    enabled: root.onlineState === "playing"
+                                    placeholderText: "say something…"
+                                    font.pixelSize: 12
+                                    onAccepted: {
+                                        if (text.trim().length) {
+                                            root.backend.sendChat(text)
+                                            text = ""
+                                        }
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+                                DarkButton {
+                                    Layout.fillWidth: true
+                                    text: "Draw"
+                                    enabled: root.gameActive && root.onlineState === "playing"
+                                    onClicked: root.backend.agreeDraw()
+                                }
+                                DarkButton {
+                                    Layout.fillWidth: true
+                                    text: "Resign"
+                                    enabled: root.gameActive && root.onlineState === "playing"
+                                    danger: true
+                                    onClicked: root.backend.resign()
+                                }
+                                DarkButton {
+                                    Layout.fillWidth: true
+                                    text: "Leave"
+                                    enabled: root.onlineState !== "offline"
+                                    onClicked: root.backend.leaveOnlineGame()
+                                }
+                            }
+                        }
+
                         // Status line (engine mode)
                         Text {
-                            visible: !root.tableMode && root.statusText !== ""
+                            visible: !root.tableMode && !root.onlineGame && root.statusText !== ""
                                      && root.gameState !== "gameOver"
                             Layout.fillWidth: true
                             text: root.statusText
@@ -892,7 +1084,7 @@ Item {
                             Layout.fillWidth: true
                             spacing: 6
                             Text { text: "›"; color: root.cAccent; font.pixelSize: 14 }
-                            TextField {
+                            DarkField {
                                 id: moveInput
                                 Layout.fillWidth: true
                                 enabled: root.myTurn
@@ -1040,13 +1232,13 @@ Item {
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 6
-                            TextField {
+                            DarkField {
                                 id: enginePathField
                                 Layout.fillWidth: true
                                 placeholderText: "/path/to/stockfish"
                                 font.pixelSize: 11
                             }
-                            Button {
+                            DarkButton {
                                 text: "Use"
                                 enabled: enginePathField.text.trim() !== ""
                                 onClicked: root.backend.setEnginePath(enginePathField.text)
@@ -1088,13 +1280,15 @@ Item {
         Text { text: "Chess"; font.pixelSize: 10; color: root.cMuted }
         Text { text: "·"; font.pixelSize: 10; color: root.cMuted }
         Text {
-            text: (root.tableMode ? "Pass & play" : "vs " + root.engineName)
+            text: (root.onlineGame
+                   ? "Online" + (root.peerName ? " vs " + root.peerName : "")
+                   : root.tableMode ? "Pass & play" : "vs " + root.engineName)
                   + (root.untimed ? "" : " · " + root.nextTimeMin + ":00 each")
             font.pixelSize: 10
             color: root.cMuted
         }
         Item { Layout.fillWidth: true }
-        Text { text: "0.2.0"; font.pixelSize: 10; color: root.cMuted }
+        Text { text: "0.3.0"; font.pixelSize: 10; color: root.cMuted }
     }
 
     // ----------------------------------------------------------------------
@@ -1106,6 +1300,11 @@ Item {
         x: Math.round((parent.width - width) / 2)
         y: Math.round((parent.height - height) / 2)
         padding: 20
+        background: Rectangle {
+            radius: 12
+            color: root.cCard
+            border.color: root.cBorder
+        }
         property string dialogMode: "engine"
         onAboutToShow: {
             dlgSkill.value = root.skill
@@ -1118,18 +1317,56 @@ Item {
 
             Text {
                 text: newGameDialog.dialogMode === "table" ? "New game — two players"
-                                                           : "New game — vs Stockfish"
+                    : newGameDialog.dialogMode === "online" ? "Play online"
+                    : "New game — vs Stockfish"
                 font.pixelSize: 16
                 font.bold: true
                 color: root.cText
             }
 
+            ColumnLayout {
+                visible: newGameDialog.dialogMode === "online"
+                spacing: 8
+                DarkField {
+                    id: onlineNameField
+                    Layout.fillWidth: true
+                    placeholderText: "Your name"
+                    font.pixelSize: 12
+                }
+                RowLayout {
+                    spacing: 6
+                    DarkField {
+                        id: onlineCodeField
+                        Layout.fillWidth: true
+                        placeholderText: "game code (share it with your opponent)"
+                        font.pixelSize: 12
+                    }
+                    DarkButton {
+                        text: "random"
+                        onClicked: onlineCodeField.text =
+                            Math.random().toString(36).slice(2, 8)
+                    }
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: "Both players enter the same code — one hosts, the other joins. "
+                          + "Moves and chat travel over Logos Delivery, peer to peer."
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: 10
+                    color: root.cMuted
+                }
+            }
+
             RowLayout {
-                visible: newGameDialog.dialogMode === "engine"
+                visible: newGameDialog.dialogMode !== "table"
                 spacing: 8
                 RadioButton { id: whiteRadio; text: "White"; checked: true }
                 RadioButton { id: blackRadio; text: "Black" }
-                RadioButton { id: randomRadio; text: "Random" }
+                RadioButton {
+                    id: randomRadio
+                    visible: newGameDialog.dialogMode === "engine"
+                    text: "Random"
+                }
             }
 
             ColumnLayout {
@@ -1167,8 +1404,32 @@ Item {
             RowLayout {
                 Layout.alignment: Qt.AlignRight
                 spacing: 8
-                Button { text: "Cancel"; onClicked: newGameDialog.close() }
-                Button {
+                DarkButton { text: "Cancel"; onClicked: newGameDialog.close() }
+                DarkButton {
+                    visible: newGameDialog.dialogMode === "online"
+                    text: "Join game"
+                    enabled: root.ready && onlineCodeField.text.trim() !== ""
+                    onClicked: {
+                        root.backend.joinOnlineGame(onlineCodeField.text,
+                                                    onlineNameField.text)
+                        newGameDialog.close()
+                    }
+                }
+                DarkButton {
+                    visible: newGameDialog.dialogMode === "online"
+                    text: "Host game"
+                    enabled: root.ready && onlineCodeField.text.trim() !== ""
+                    onClicked: {
+                        var mins = [3, 5, 10, 30, 0][timeCombo.currentIndex]
+                        root.nextTimeMin = mins
+                        root.backend.hostOnlineGame(onlineCodeField.text,
+                                                    whiteRadio.checked,
+                                                    mins, onlineNameField.text)
+                        newGameDialog.close()
+                    }
+                }
+                DarkButton {
+                    visible: newGameDialog.dialogMode !== "online"
                     text: "Start"
                     enabled: root.ready
                     onClicked: {
@@ -1193,6 +1454,11 @@ Item {
         x: Math.round((parent.width - width) / 2)
         y: Math.round((parent.height - height) / 2)
         padding: 16
+        background: Rectangle {
+            radius: 12
+            color: root.cCard
+            border.color: root.cBorder
+        }
 
         contentItem: ColumnLayout {
             spacing: 10
@@ -1205,7 +1471,7 @@ Item {
                 spacing: 8
                 Repeater {
                     model: ["q", "r", "b", "n"]
-                    Button {
+                    DarkButton {
                         required property string modelData
                         text: { var g = { "q": "♛", "r": "♜", "b": "♝", "n": "♞" }; return g[modelData] }
                         font.pixelSize: 26

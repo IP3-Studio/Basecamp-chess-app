@@ -1,10 +1,18 @@
 #include "chess_ui_backend.h"
 
+// Generated umbrella: LogosModules (behind modules()) from
+// metadata.json#dependencies — typed wrappers + typed event accessors.
+#include "logos_sdk.h"
+
 #include <QDir>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QUuid>
+#include <QVariantMap>
 
 #include <cctype>
 
@@ -186,6 +194,12 @@ ChessUiBackend::ChessUiBackend()
     QObject::connect(&m_clockTimer, &QTimer::timeout, &m_clockTimer,
                      [this]() { tickClock(); });
     m_clockTimer.start();
+
+    m_beaconTimer.setInterval(4000);
+    QObject::connect(&m_beaconTimer, &QTimer::timeout, &m_beaconTimer,
+                     [this]() { sendBeacon(); });
+
+    m_selfId = QUuid::createUuid().toString(QUuid::WithoutBraces);
 }
 
 ChessUiBackend::~ChessUiBackend()
@@ -330,15 +344,24 @@ void ChessUiBackend::send(const QString& line)
 
 void ChessUiBackend::newGame(QString gameMode, bool asWhite, int skillLevel, int timeControlMin)
 {
-    m_mode = gameMode == QLatin1String("table") ? QStringLiteral("table")
-                                                : QStringLiteral("engine");
+    if (onlineMode() && gameMode != QLatin1String("online"))
+        teardownOnline(true);
+    const QString m = gameMode == QLatin1String("table") ? QStringLiteral("table")
+                                                         : QStringLiteral("engine");
+    startMatch(m, asWhite, skillLevel,
+               timeControlMin <= 0 ? 0 : qint64(timeControlMin) * 60000);
+}
+
+void ChessUiBackend::startMatch(const QString& gameMode, bool asWhite, int skillLevel, qint64 tcMs)
+{
+    m_mode = gameMode;
     setMode(m_mode);
     m_playerWhite = asWhite;
     m_skill = qBound(0, skillLevel, 20);
     setSkill(m_skill);
     m_moveTimeMs = 300 + m_skill * 60;
-    m_untimed = timeControlMin <= 0;
-    m_whiteMs = m_blackMs = m_untimed ? 0 : qint64(timeControlMin) * 60000;
+    m_untimed = tcMs <= 0;
+    m_whiteMs = m_blackMs = m_untimed ? 0 : tcMs;
     setClockWhiteMs(int(m_whiteMs));
     setClockBlackMs(int(m_blackMs));
 
@@ -363,6 +386,10 @@ void ChessUiBackend::newGame(QString gameMode, bool asWhite, int skillLevel, int
 
     if (tableMode())
         appendLog(QStringLiteral("The table is set. White to play."));
+    else if (onlineMode())
+        appendLog(QStringLiteral("Online game vs %1 — you play %2.")
+                      .arg(peerName().isEmpty() ? QStringLiteral("your opponent") : peerName())
+                      .arg(colorName(m_playerWhite)));
     else
         appendLog(QStringLiteral("Loaded. Skill %1. %2 to move.")
                       .arg(m_skill)
@@ -397,7 +424,7 @@ void ChessUiBackend::playerMove(QString uciMove)
         return;
     if (!m_collectedMoves.contains(uciMove))
         return;
-    applyMove(uciMove);
+    applyMove(uciMove, true);
 }
 
 void ChessUiBackend::typedMove(QString text)
@@ -411,7 +438,7 @@ void ChessUiBackend::typedMove(QString text)
     // UCI form first (e2e4, e7e8q).
     const QString lowered = raw.toLower();
     if (m_collectedMoves.contains(lowered)) {
-        applyMove(lowered);
+        applyMove(lowered, true);
         return;
     }
 
@@ -427,11 +454,11 @@ void ChessUiBackend::typedMove(QString text)
             looseHits << m_collectedMoves.at(i);
     }
     if (caseHits.size() == 1) {
-        applyMove(caseHits.first());
+        applyMove(caseHits.first(), true);
         return;
     }
     if (caseHits.isEmpty() && looseHits.size() == 1) {
-        applyMove(looseHits.first());
+        applyMove(looseHits.first(), true);
         return;
     }
     setStatus(caseHits.size() > 1 || looseHits.size() > 1
@@ -441,6 +468,8 @@ void ChessUiBackend::typedMove(QString text)
 
 void ChessUiBackend::undoMove()
 {
+    if (onlineMode())
+        return;  // no takeback protocol between peers
     const QString st = gameState();
     if (st != QLatin1String("playerTurn") && st != QLatin1String("gameOver"))
         return;
@@ -484,24 +513,43 @@ void ChessUiBackend::resign()
 {
     const QString st = gameState();
     if (st != QLatin1String("playerTurn") && st != QLatin1String("engineThinking")
-        && st != QLatin1String("working"))
+        && st != QLatin1String("working") && st != QLatin1String("opponentTurn"))
         return;
     if (searchPending())
         send(QStringLiteral("stop"));
     ++m_gen;
-    if (tableMode())
+    if (onlineMode()) {
+        publishJson({{QStringLiteral("t"), QStringLiteral("resign")}});
+        endGame(QStringLiteral("You resigned — %1 wins.")
+                    .arg(peerName().isEmpty() ? QStringLiteral("your opponent") : peerName()));
+    } else if (tableMode()) {
         endGame(QStringLiteral("%1 resigns — %2 wins.")
                     .arg(colorName(sideToMove() == QLatin1String("w")))
                     .arg(colorName(sideToMove() != QLatin1String("w"))));
-    else
+    } else {
         endGame(QStringLiteral("You resigned — Stockfish wins."));
+    }
 }
 
 void ChessUiBackend::agreeDraw()
 {
     const QString st = gameState();
-    if (st != QLatin1String("playerTurn") && st != QLatin1String("working"))
+    if (st != QLatin1String("playerTurn") && st != QLatin1String("working")
+        && st != QLatin1String("opponentTurn"))
         return;
+    if (onlineMode()) {
+        if (m_peerOfferedDraw) {
+            publishJson({{QStringLiteral("t"), QStringLiteral("drawAccept")}});
+            ++m_gen;
+            endGame(QStringLiteral("Draw agreed."));
+        } else if (!m_drawOffered) {
+            m_drawOffered = true;
+            publishJson({{QStringLiteral("t"), QStringLiteral("drawOffer")}});
+            appendChat(QStringLiteral("· You offered a draw."));
+            setStatus(QStringLiteral("Draw offered — waiting for %1.").arg(peerName()));
+        }
+        return;
+    }
     if (!tableMode())
         return;
     ++m_gen;
@@ -683,10 +731,13 @@ void ChessUiBackend::finishPerft()
     if (m_collectedMoves.isEmpty()) {
         if (!m_pendingCheckers.isEmpty()) {
             const bool whiteMated = sideToMove() == QLatin1String("w");
+            const QString opp = onlineMode()
+                ? (peerName().isEmpty() ? QStringLiteral("Your opponent") : peerName())
+                : QStringLiteral("Stockfish");
             if (tableMode())
                 endGame(QStringLiteral("Checkmate — %1 wins.").arg(colorName(!whiteMated)));
             else
-                endGame(isPlayersTurn() ? QStringLiteral("Checkmate — Stockfish wins.")
+                endGame(isPlayersTurn() ? QStringLiteral("Checkmate — %1 wins.").arg(opp)
                                         : QStringLiteral("Checkmate — you win!"));
         } else {
             endGame(QStringLiteral("Stalemate — it's a draw."));
@@ -721,6 +772,18 @@ void ChessUiBackend::finishPerft()
         else
             setStatus(inCheck() ? QStringLiteral("Your move — check!")
                                 : QStringLiteral("Your move."));
+    } else if (onlineMode()) {
+        setGameState(QStringLiteral("opponentTurn"));
+        setStatus(QStringLiteral("Waiting for %1...")
+                      .arg(peerName().isEmpty() ? QStringLiteral("your opponent") : peerName()));
+        if (!m_pendingRemoteMove.isEmpty()) {
+            const QString mv = m_pendingRemoteMove;
+            m_pendingRemoteMove.clear();
+            if (m_collectedMoves.contains(mv))
+                applyMove(mv);
+            else
+                enterOnlineError(QStringLiteral("The game went out of sync — please start a new one."));
+        }
     } else {
         startThinking();
     }
@@ -781,7 +844,7 @@ void ChessUiBackend::applyEngineMove(const QString& mv)
 // ---------------------------------------------------------------------------
 // Game state
 
-void ChessUiBackend::applyMove(const QString& uciMove)
+void ChessUiBackend::applyMove(const QString& uciMove, bool broadcast)
 {
     const QString san = sanForMove(parseBoard(fen()), uciMove, m_collectedMoves);
     m_moves << uciMove;
@@ -791,6 +854,14 @@ void ChessUiBackend::applyMove(const QString& uciMove)
     setGameState(QStringLiteral("working"));
     setLastMove(uciMove);
     rebuildSanRows();
+
+    if (broadcast && onlineMode()) {
+        const qint64 myClock = m_playerWhite ? m_whiteMs : m_blackMs;
+        publishJson({{QStringLiteral("t"), QStringLiteral("move")},
+                     {QStringLiteral("ply"), m_moves.size() - 1},
+                     {QStringLiteral("uci"), uciMove},
+                     {QStringLiteral("clockMs"), myClock}});
+    }
     refreshPosition();
 }
 
@@ -881,7 +952,7 @@ bool ChessUiBackend::clockActive() const
         return false;
     const QString st = gameState();
     return st == QLatin1String("playerTurn") || st == QLatin1String("engineThinking")
-        || st == QLatin1String("working");
+        || st == QLatin1String("working") || st == QLatin1String("opponentTurn");
 }
 
 void ChessUiBackend::tickClock()
@@ -899,13 +970,342 @@ void ChessUiBackend::tickClock()
         ++m_gen;
         if (searchPending())
             send(QStringLiteral("stop"));
+        const QString opp = onlineMode()
+            ? (peerName().isEmpty() ? QStringLiteral("your opponent") : peerName())
+            : QStringLiteral("Stockfish");
         if (tableMode())
             endGame(QStringLiteral("%1 ran out of time — %2 wins.")
                         .arg(colorName(whiteToMove))
                         .arg(colorName(!whiteToMove)));
         else if (whiteToMove == m_playerWhite)
-            endGame(QStringLiteral("You ran out of time — Stockfish wins."));
+            endGame(QStringLiteral("You ran out of time — %1 wins.").arg(opp));
         else
-            endGame(QStringLiteral("Stockfish ran out of time — you win!"));
+            endGame(QStringLiteral("%1 ran out of time — you win!").arg(opp));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Online play over delivery_module
+//
+// Two peers who share a game code meet on the content topic
+// /logos-chess/1/game-<code>/json. The host beacons its presence every few
+// seconds until a joiner answers; moves, chat, and game-end messages are small
+// JSON payloads on the same topic, each tagged with the sender's session id so
+// our own relayed messages can be discarded.
+
+void ChessUiBackend::setOnline(const QString& state, const QString& info)
+{
+    setOnlineState(state);
+    setOnlineInfo(info);
+}
+
+void ChessUiBackend::enterOnlineError(const QString& detail)
+{
+    m_beaconTimer.stop();
+    setOnline(QStringLiteral("error"), detail);
+}
+
+void ChessUiBackend::appendChat(const QString& line)
+{
+    m_chatLines << line;
+    while (m_chatLines.size() > 200)
+        m_chatLines.removeFirst();
+    setChatLog(m_chatLines.join(QLatin1Char('\n')));
+}
+
+void ChessUiBackend::ensureDelivery(std::function<void(bool, QString)> done)
+{
+    if (!m_eventsArmed) {
+        m_eventsArmed = true;
+        modules().delivery_module.onMessageReceived(
+            [this](const QString&, const QString& contentTopic, QByteArray payload, int) {
+                if (!m_topic.isEmpty() && contentTopic == m_topic)
+                    handleDeliveryMessage(payload);
+            });
+    }
+    if (m_deliveryReady) {
+        done(true, QString());
+        return;
+    }
+    // createNode rejects duplicates and start is not idempotent — another
+    // consumer (Basecamp's Chat app) may already own the node. Both results
+    // are deliberately ignored; subscribe is the call that has to succeed.
+    const QString cfg = QStringLiteral(
+        "{\"mode\":\"Core\",\"preset\":\"logos.dev\",\"logLevel\":\"ERROR\"}");
+    modules().delivery_module.createNodeAsync(cfg, [this, done](LogosResult) {
+        modules().delivery_module.startAsync([this, done](LogosResult) {
+            m_deliveryReady = true;
+            done(true, QString());
+        });
+    });
+}
+
+void ChessUiBackend::teardownOnline(bool notifyPeer)
+{
+    if (m_topic.isEmpty())
+        return;
+    if (notifyPeer && m_deliveryReady)
+        publishJson({{QStringLiteral("t"), QStringLiteral("leave")}});
+    if (m_deliveryReady)
+        modules().delivery_module.unsubscribeAsync(m_topic, [](LogosResult) {});
+    ++m_onlineGen;
+    m_beaconTimer.stop();
+    m_topic.clear();
+    m_pendingRemoteMove.clear();
+    m_isHost = false;
+    m_drawOffered = false;
+    m_peerOfferedDraw = false;
+    setPeerName(QString());
+    setGameCode(QString());
+    setOnline(QStringLiteral("offline"), QString());
+}
+
+void ChessUiBackend::hostOnlineGame(QString code, bool asWhite, int timeControlMin, QString name)
+{
+    teardownOnline(true);
+    static const QRegularExpression bad(QStringLiteral("[^a-z0-9-]"));
+    const QString clean = code.trimmed().toLower().remove(bad).left(24);
+    if (clean.isEmpty()) {
+        setOnline(QStringLiteral("error"), QStringLiteral("Enter a game code first."));
+        return;
+    }
+    m_selfName = name.trimmed().isEmpty() ? QStringLiteral("Host") : name.trimmed();
+    m_playerWhite = asWhite;
+    m_hostTcMin = qMax(0, timeControlMin);
+    m_isHost = true;
+    m_topic = QStringLiteral("/logos-chess/1/game-%1/json").arg(clean);
+    setGameCode(clean);
+    setOnline(QStringLiteral("starting"), QStringLiteral("Starting the delivery node..."));
+
+    const int gen = ++m_onlineGen;
+    ensureDelivery([this, gen](bool ok, QString detail) {
+        if (gen != m_onlineGen)
+            return;
+        if (!ok) {
+            enterOnlineError(detail);
+            return;
+        }
+        subscribeTopic();
+    });
+    QTimer::singleShot(10000, &m_proc, [this, gen]() {
+        if (gen == m_onlineGen && onlineState() == QLatin1String("starting"))
+            enterOnlineError(QStringLiteral(
+                "The delivery module is not responding — is delivery_module installed and loaded?"));
+    });
+}
+
+void ChessUiBackend::joinOnlineGame(QString code, QString name)
+{
+    teardownOnline(true);
+    static const QRegularExpression bad(QStringLiteral("[^a-z0-9-]"));
+    const QString clean = code.trimmed().toLower().remove(bad).left(24);
+    if (clean.isEmpty()) {
+        setOnline(QStringLiteral("error"), QStringLiteral("Enter the game code you were given."));
+        return;
+    }
+    m_selfName = name.trimmed().isEmpty() ? QStringLiteral("Guest") : name.trimmed();
+    m_isHost = false;
+    m_topic = QStringLiteral("/logos-chess/1/game-%1/json").arg(clean);
+    setGameCode(clean);
+    setOnline(QStringLiteral("starting"), QStringLiteral("Starting the delivery node..."));
+
+    const int gen = ++m_onlineGen;
+    ensureDelivery([this, gen](bool ok, QString detail) {
+        if (gen != m_onlineGen)
+            return;
+        if (!ok) {
+            enterOnlineError(detail);
+            return;
+        }
+        subscribeTopic();
+    });
+    QTimer::singleShot(10000, &m_proc, [this, gen]() {
+        if (gen == m_onlineGen && onlineState() == QLatin1String("starting"))
+            enterOnlineError(QStringLiteral(
+                "The delivery module is not responding — is delivery_module installed and loaded?"));
+    });
+}
+
+void ChessUiBackend::leaveOnlineGame()
+{
+    const bool wasPlaying = onlineMode() && gameState() != QLatin1String("gameOver")
+        && onlineState() == QLatin1String("playing");
+    teardownOnline(true);
+    if (wasPlaying) {
+        ++m_gen;
+        endGame(QStringLiteral("You left the game."));
+    }
+}
+
+void ChessUiBackend::sendChat(QString text)
+{
+    const QString trimmed = text.trimmed().left(400);
+    if (trimmed.isEmpty() || m_topic.isEmpty())
+        return;
+    publishJson({{QStringLiteral("t"), QStringLiteral("chat")},
+                 {QStringLiteral("name"), m_selfName},
+                 {QStringLiteral("text"), trimmed}});
+    appendChat(QStringLiteral("You: %1").arg(trimmed));
+}
+
+void ChessUiBackend::subscribeTopic()
+{
+    const int gen = m_onlineGen;
+    modules().delivery_module.subscribeAsync(m_topic, [this, gen](LogosResult r) {
+        if (gen != m_onlineGen)
+            return;
+        if (!r.success) {
+            enterOnlineError(QStringLiteral("Could not subscribe to the game topic: %1")
+                                 .arg(r.getError()));
+            return;
+        }
+        if (m_isHost) {
+            setOnline(QStringLiteral("waiting"),
+                      QStringLiteral("Waiting for an opponent — share the code \"%1\".")
+                          .arg(gameCode()));
+            sendBeacon();
+            m_beaconTimer.start();
+        } else {
+            setOnline(QStringLiteral("joining"),
+                      QStringLiteral("Looking for the host of \"%1\"...").arg(gameCode()));
+        }
+    });
+}
+
+void ChessUiBackend::sendBeacon()
+{
+    publishJson({{QStringLiteral("t"), QStringLiteral("host")},
+                 {QStringLiteral("name"), m_selfName},
+                 {QStringLiteral("color"), m_playerWhite ? QStringLiteral("w")
+                                                         : QStringLiteral("b")},
+                 {QStringLiteral("tcMin"), m_hostTcMin}});
+}
+
+void ChessUiBackend::publishJson(const QVariantMap& obj)
+{
+    if (m_topic.isEmpty())
+        return;
+    QVariantMap tagged = obj;
+    tagged.insert(QStringLiteral("v"), 1);
+    tagged.insert(QStringLiteral("from"), m_selfId);
+    const QByteArray payload =
+        QJsonDocument(QJsonObject::fromVariantMap(tagged)).toJson(QJsonDocument::Compact);
+    modules().delivery_module.sendAsync(m_topic, payload, [](LogosResult) {});
+}
+
+void ChessUiBackend::handleDeliveryMessage(const QByteArray& payload)
+{
+    const QJsonObject msg = QJsonDocument::fromJson(payload).object();
+    if (msg.isEmpty() || msg.value(QStringLiteral("from")).toString() == m_selfId)
+        return;
+    const QString t = msg.value(QStringLiteral("t")).toString();
+    const QString state = onlineState();
+
+    if (t == QLatin1String("host") && !m_isHost) {
+        if (state == QLatin1String("joining")) {
+            const QString hostName = msg.value(QStringLiteral("name")).toString();
+            const bool hostWhite =
+                msg.value(QStringLiteral("color")).toString() != QLatin1String("b");
+            const int tcMin = msg.value(QStringLiteral("tcMin")).toInt(10);
+            setPeerName(hostName.isEmpty() ? QStringLiteral("Host") : hostName);
+            publishJson({{QStringLiteral("t"), QStringLiteral("join")},
+                         {QStringLiteral("name"), m_selfName}});
+            setOnline(QStringLiteral("playing"),
+                      QStringLiteral("Connected to %1.").arg(peerName()));
+            appendChat(QStringLiteral("· Connected to %1.").arg(peerName()));
+            startMatch(QStringLiteral("online"), !hostWhite, m_skill,
+                       tcMin <= 0 ? 0 : qint64(tcMin) * 60000);
+        } else if (state == QLatin1String("playing")) {
+            // Our join answer was lost — the host is still beaconing.
+            publishJson({{QStringLiteral("t"), QStringLiteral("join")},
+                         {QStringLiteral("name"), m_selfName}});
+        }
+        return;
+    }
+
+    if (t == QLatin1String("join") && m_isHost) {
+        if (state == QLatin1String("waiting")) {
+            m_beaconTimer.stop();
+            const QString guest = msg.value(QStringLiteral("name")).toString();
+            setPeerName(guest.isEmpty() ? QStringLiteral("Guest") : guest);
+            setOnline(QStringLiteral("playing"),
+                      QStringLiteral("Connected to %1.").arg(peerName()));
+            appendChat(QStringLiteral("· %1 joined the game.").arg(peerName()));
+            startMatch(QStringLiteral("online"), m_playerWhite, m_skill,
+                       m_hostTcMin <= 0 ? 0 : qint64(m_hostTcMin) * 60000);
+        }
+        return;
+    }
+
+    if (state != QLatin1String("playing"))
+        return;
+
+    if (t == QLatin1String("move")) {
+        const int ply = msg.value(QStringLiteral("ply")).toInt(-1);
+        const QString uci = msg.value(QStringLiteral("uci")).toString();
+        const qint64 clockMs =
+            static_cast<qint64>(msg.value(QStringLiteral("clockMs")).toDouble(-1));
+        if (ply < m_moves.size())
+            return;  // duplicate or our own echo of an old ply
+        if (ply > m_moves.size()) {
+            enterOnlineError(QStringLiteral("The game went out of sync — please start a new one."));
+            return;
+        }
+        if (clockMs >= 0 && !m_untimed) {
+            if (m_playerWhite) {
+                m_blackMs = clockMs;
+                setClockBlackMs(int(clockMs));
+            } else {
+                m_whiteMs = clockMs;
+                setClockWhiteMs(int(clockMs));
+            }
+        }
+        if (gameState() == QLatin1String("opponentTurn") && m_collectedMoves.contains(uci))
+            applyMove(uci);
+        else
+            m_pendingRemoteMove = uci;  // validated once the current refresh lands
+        return;
+    }
+
+    if (t == QLatin1String("chat")) {
+        const QString name = msg.value(QStringLiteral("name")).toString();
+        appendChat(QStringLiteral("%1: %2")
+                       .arg(name.isEmpty() ? QStringLiteral("Opponent") : name)
+                       .arg(msg.value(QStringLiteral("text")).toString().left(400)));
+        return;
+    }
+
+    if (t == QLatin1String("resign")) {
+        ++m_gen;
+        endGame(QStringLiteral("%1 resigned — you win!").arg(peerName()));
+        appendChat(QStringLiteral("· %1 resigned.").arg(peerName()));
+        return;
+    }
+
+    if (t == QLatin1String("drawOffer")) {
+        m_peerOfferedDraw = true;
+        appendChat(QStringLiteral("· %1 offers a draw — press \"Agree a draw\" to accept.")
+                       .arg(peerName()));
+        return;
+    }
+
+    if (t == QLatin1String("drawAccept")) {
+        if (m_drawOffered) {
+            ++m_gen;
+            endGame(QStringLiteral("Draw agreed."));
+        }
+        return;
+    }
+
+    if (t == QLatin1String("leave")) {
+        appendChat(QStringLiteral("· %1 left the game.").arg(peerName()));
+        if (gameState() != QLatin1String("gameOver")) {
+            ++m_gen;
+            endGame(QStringLiteral("%1 left the game.").arg(peerName()));
+        }
+        m_beaconTimer.stop();
+        setOnline(QStringLiteral("offline"),
+                  QStringLiteral("%1 left the game.").arg(peerName()));
+        return;
     }
 }

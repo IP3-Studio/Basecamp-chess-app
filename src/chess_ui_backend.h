@@ -39,6 +39,10 @@ public:
     void agreeDraw() override;
     void changeSkill(int level) override;
     void setEnginePath(QString path) override;
+    void hostOnlineGame(QString code, bool asWhite, int timeControlMin, QString name) override;
+    void joinOnlineGame(QString code, QString name) override;
+    void leaveOnlineGame() override;
+    void sendChat(QString text) override;
 
     void onContextReady() override;
 
@@ -67,7 +71,8 @@ private:
     bool handshakePending() const;
 
     // game state
-    void applyMove(const QString& uciMove);
+    void startMatch(const QString& gameMode, bool asWhite, int skillLevel, qint64 tcMs);
+    void applyMove(const QString& uciMove, bool broadcast = false);
     void endGame(const QString& text);
     void rebuildSanRows();
     void updateMaterial();
@@ -81,6 +86,19 @@ private:
     // clock
     void tickClock();
     bool clockActive() const;
+
+    // online play over delivery_module
+    void ensureDelivery(std::function<void(bool ok, QString detail)> done);
+    void teardownOnline(bool notifyPeer);
+    void subscribeTopic();
+    void publishJson(const QVariantMap& obj);
+    void handleDeliveryMessage(const QByteArray& payload);
+    void startOnlineMatch(bool asWhite, int tcMs);
+    void sendBeacon();
+    void enterOnlineError(const QString& detail);
+    void appendChat(const QString& line);
+    void setOnline(const QString& state, const QString& info);
+    bool onlineMode() const { return m_mode == QLatin1String("online"); }
 
     QProcess m_proc;
     QTimer m_clockTimer;
@@ -107,4 +125,19 @@ private:
     bool m_deferredSetup = false;  // newGame arrived mid-search; run setup after bestmove
     bool m_skillDirty = false;     // setSkill arrived mid-search; apply after bestmove
     bool m_quitting = false;
+
+    // online play
+    QTimer m_beaconTimer;
+    QStringList m_chatLines;
+    QString m_selfId;
+    QString m_selfName;
+    QString m_topic;
+    QString m_pendingRemoteMove;
+    int m_onlineGen = 0;           // invalidates async delivery callbacks on leave
+    int m_hostTcMin = 10;
+    bool m_isHost = false;
+    bool m_deliveryReady = false;
+    bool m_eventsArmed = false;
+    bool m_drawOffered = false;
+    bool m_peerOfferedDraw = false;
 };

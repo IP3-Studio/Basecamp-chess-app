@@ -9,6 +9,10 @@ class ChessUi
     SLOT(void agreeDraw())
     SLOT(void changeSkill(int level))
     SLOT(void setEnginePath(QString path))
+    SLOT(void hostOnlineGame(QString code, bool asWhite, int timeControlMin, QString name))
+    SLOT(void joinOnlineGame(QString code, QString name))
+    SLOT(void leaveOnlineGame())
+    SLOT(void sendChat(QString text))
 
     PROP(QString mode="engine" READONLY)
     PROP(QString fen="" READONLY)
@@ -29,6 +33,11 @@ class ChessUi
     PROP(int clockWhiteMs=600000 READONLY)
     PROP(int clockBlackMs=600000 READONLY)
     PROP(QString material="" READONLY)
+    PROP(QString onlineState="offline" READONLY)
+    PROP(QString onlineInfo="" READONLY)
+    PROP(QString gameCode="" READONLY)
+    PROP(QString peerName="" READONLY)
+    PROP(QString chatLog="" READONLY)
 
     SIGNAL(hintReady(QString uciMove))
 }

@@ -10,14 +10,28 @@ ships no hand-written move generator that could disagree with the rules.
 
 ## What it does
 
-- Click-to-move board with legal-move markers, last-move, check, and hint highlights
-- Auto-orients to your colour, manual flip available
-- Difficulty 0 to 20 (Stockfish Skill Level) with matched think time
-- Hints (always full strength, even when the opponent is dialled down), undo,
-  promotion picker, move list, live eval readout
-- Full game-end detection: checkmate, stalemate, fifty-move rule, threefold
-  repetition, insufficient material
-- Engine auto-discovery with an in-app path override if Stockfish is not found
+Three ways to play, switchable from the top-left mode tabs:
+
+- **Engine** — vs Stockfish: difficulty 0 to 20 (adjustable mid-game from
+  Settings), live clocks, evaluation bar and readout, engine commentary stream,
+  full-strength hints, undo, typed SAN/UCI move input
+- **Table** — two humans passing one machine: editable names, both clocks live,
+  material tracker, resign and agree-a-draw, board turns after every move
+- **Online** — two humans on different machines over
+  [Logos Delivery](https://github.com/logos-co/logos-delivery-module), World
+  Chess Network style: share a game code, host and join, play in real time
+  with chat; moves and messages travel peer to peer on a content topic
+  (`/logos-chess/1/game-<code>/json`), no game server anywhere
+
+Everywhere: click-to-move with legal-move markers, last-move / check / hint
+highlights, SAN move list, promotion picker, and full game-end detection
+(checkmate, stalemate, fifty-move rule, threefold repetition, insufficient
+material, time forfeit). Stockfish referees all modes, and engine
+auto-discovery has an in-app path override in Settings.
+
+Online mode needs the `delivery_module` loaded in Basecamp (bundled
+automatically in the dev runner). Note that game topics are unencrypted: use
+a hard-to-guess code and keep the trash talk friendly.
 
 ## Install
 
