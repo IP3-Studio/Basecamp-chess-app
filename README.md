@@ -182,6 +182,19 @@ in-flight replies. A backend crash cannot take Basecamp down.
   (no claim step), and only the simple insufficient-material cases
   (K vs K, K+B vs K, K+N vs K) are recognised
 
+## Contributing
+
+Contributions are welcome — issues and pull requests both. Build it with Nix
+(see [Build from source](#build-from-source)); `DEV_QML_PATH=$PWD/src/qml nix run .`
+live-reloads the QML while you work, and `nix build .#integration-test -L` runs
+the tests.
+
+Where things live: [src/chess_ui.rep](src/chess_ui.rep) is the contract between
+the view and the backend, so a new feature usually means adding a SLOT or PROP
+there first, implementing it in
+[src/chess_ui_backend.cpp](src/chess_ui_backend.cpp), and binding it in
+[src/qml/Main.qml](src/qml/Main.qml).
+
 ## License
 
 Licensed under either of [Apache License 2.0](LICENSE-APACHE) or
