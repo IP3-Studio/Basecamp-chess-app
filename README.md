@@ -60,7 +60,7 @@ Further reading: [Basecamp docs](https://docs.logos.co/basecamp) ·
 [Get started with Logos](https://logos.co/get-started) ·
 [Logos on GitHub](https://github.com/logos-co)
 
-This app is developed against Basecamp 0.2.x (verified on 0.2.0-RC3). Online
+This app is developed against Basecamp 0.2.x (verified on 0.2.3). Online
 mode also needs the `delivery_module`, which ships with Basecamp's default
 module set — check **Modules** if you are unsure.
 
